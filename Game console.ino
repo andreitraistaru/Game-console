@@ -56,20 +56,17 @@ typedef struct
 {
   int x;
   int y;
-  char pieceType;
-  bool fixed;
   int rotation;
+  char pieceType;
+  bool enabled;
 } TetrisPiece;
 
 typedef struct
 {
-  int tetrisBoardPieces[20][16];
-  TetrisPiece tetrisPieces[MAXIMUM_NUMBER_OF_TETRIS_PIECES_ON_BOARD];
-  int numberOfPieces;
-  bool movingPiece;
-  bool rotatePiece;
-  bool emptyBoard;
   unsigned long score;
+  int tetrisBoardPieces[20][16];
+  TetrisPiece movingPiece;
+  bool rotatePiece;
 } TetrisGame;
 
 volatile TetrisGame tetris;
@@ -547,16 +544,8 @@ void drawMovingTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceT
 
 void drawTetrisBoard(char lastPieceMove)
 {
-  int movingPiece = tetris.numberOfPieces - 1;
-
-  if (movingPiece < 0)
-  {
-    movingPiece += MAXIMUM_NUMBER_OF_TETRIS_PIECES_ON_BOARD;
-  }
-
-  drawMovingTetrisPiece(tetris.tetrisPieces[movingPiece].x, tetris.tetrisPieces[movingPiece].y,
-                        tetris.tetrisPieces[movingPiece].rotation, tetris.tetrisPieces[movingPiece].pieceType,
-                        lastPieceMove);
+  drawMovingTetrisPiece(tetris.movingPiece.x, tetris.movingPiece.y, tetris.movingPiece.rotation,
+                          tetris.movingPiece.pieceType, lastPieceMove);
 
   printTetrisScore();
 }
@@ -690,7 +679,7 @@ void tetrisGameOver()
 
 void generateNewTetrisPiece(void)
 {
-  if (tetris.movingPiece)
+  if (tetris.movingPiece.enabled)
   {
     return;
   }
@@ -708,22 +697,13 @@ void generateNewTetrisPiece(void)
     x = 6;
   }
   
-  tetris.tetrisPieces[tetris.numberOfPieces].pieceType = pieceType;
-  tetris.tetrisPieces[tetris.numberOfPieces].fixed = false;
-  tetris.tetrisPieces[tetris.numberOfPieces].rotation = rotation;
-  tetris.tetrisPieces[tetris.numberOfPieces].y = 0;
-  tetris.tetrisPieces[tetris.numberOfPieces].x = 16 * x;
-  tetris.emptyBoard = false;
-  tetris.score++;
-
-  tetris.numberOfPieces++;
+  tetris.movingPiece.pieceType = pieceType;
+  tetris.movingPiece.rotation = rotation;
+  tetris.movingPiece.y = 0;
+  tetris.movingPiece.x = 16 * x;
+  tetris.movingPiece.enabled = true;
   
-  if (tetris.numberOfPieces == MAXIMUM_NUMBER_OF_TETRIS_PIECES_ON_BOARD)
-  {
-    tetris.numberOfPieces = 0;
-  }
-  
-  tetris.movingPiece = true;
+  tetris.score++;  
 
   switch(pieceType)
   {
@@ -1330,14 +1310,14 @@ bool checkTetrisPieceOnTable(int x, int y, int pieceType, int rotation)
   resetConsole();
 }
 
-char checkAndUpdateTetrisBoardForCollisions(int pieceNo, char moveDirection)
+char checkAndUpdateTetrisBoardForCollisions(char moveDirection)
 {
-  int x = tetris.tetrisPieces[pieceNo].x / 16;
-  int y = tetris.tetrisPieces[pieceNo].y / 16;
+  int x = tetris.movingPiece.x / 16;
+  int y = tetris.movingPiece.y / 16;
   int dx = 0;
   int dy = 0;
-  int pieceType = tetris.tetrisPieces[pieceNo].pieceType;
-  int rotation = tetris.tetrisPieces[pieceNo].rotation;
+  int pieceType = tetris.movingPiece.pieceType;
+  int rotation = tetris.movingPiece.rotation;
   bool collision = false;
 
   if (moveDirection == TETRIS_PIECE_MOVE_DOWN)
@@ -1384,7 +1364,7 @@ char checkAndUpdateTetrisBoardForCollisions(int pieceNo, char moveDirection)
     else
     {
       modifyTetrisPieceFromBoard(x, y, pieceType, rotation, true);
-      tetris.tetrisPieces[pieceNo].rotation = rotation;  
+      tetris.movingPiece.rotation = rotation;  
     }         
   }
   else if (moveDirection != TETRIS_PIECE_FIXED)
@@ -1407,8 +1387,8 @@ char checkAndUpdateTetrisBoardForCollisions(int pieceNo, char moveDirection)
   }
   else
   {
-    tetris.tetrisPieces[pieceNo].x += 16 * dx;
-    tetris.tetrisPieces[pieceNo].y += 16 * dy;
+    tetris.movingPiece.x += 16 * dx;
+    tetris.movingPiece.y += 16 * dy;
   }
 
   return moveDirection;
@@ -1417,12 +1397,7 @@ char checkAndUpdateTetrisBoardForCollisions(int pieceNo, char moveDirection)
 char passTimeTetrisGame(void)
 {
   int rotate = tetris.rotatePiece;
-  
-  if (tetris.emptyBoard)
-  {
-    return TETRIS_PIECE_FIXED;
-  }
-  
+    
   int joystickOX;
   char moveDirectionJoystick = TETRIS_PIECE_MOVE_DOWN, moveDirection;
 
@@ -1439,28 +1414,21 @@ char passTimeTetrisGame(void)
 
   moveDirection = moveDirectionJoystick;
 
-  int movingPiece = tetris.numberOfPieces - 1;
-  
-  if (movingPiece < 0)
-  {
-    movingPiece += MAXIMUM_NUMBER_OF_TETRIS_PIECES_ON_BOARD;
-  }
-  
   int pieceHeight = 16;
   int pieceWidth = 16;
 
   if (rotate)
   {
-    pieceHeight *= getDimensionTetrisPiece(tetris.tetrisPieces[movingPiece].pieceType, tetris.tetrisPieces[movingPiece].rotation, true);
-    pieceWidth *= getDimensionTetrisPiece(tetris.tetrisPieces[movingPiece].pieceType, tetris.tetrisPieces[movingPiece].rotation, false);
+    pieceHeight *= getDimensionTetrisPiece(tetris.movingPiece.pieceType, tetris.movingPiece.rotation, true);
+    pieceWidth *= getDimensionTetrisPiece(tetris.movingPiece.pieceType, tetris.movingPiece.rotation, false);
   }
   else
   {
-    pieceHeight *= getDimensionTetrisPiece(tetris.tetrisPieces[movingPiece].pieceType, tetris.tetrisPieces[movingPiece].rotation, false);
-    pieceWidth *= getDimensionTetrisPiece(tetris.tetrisPieces[movingPiece].pieceType, tetris.tetrisPieces[movingPiece].rotation, false);
+    pieceHeight *= getDimensionTetrisPiece(tetris.movingPiece.pieceType, tetris.movingPiece.rotation, false);
+    pieceWidth *= getDimensionTetrisPiece(tetris.movingPiece.pieceType, tetris.movingPiece.rotation, false);
   }
   
-  if (tetris.tetrisPieces[movingPiece].y + pieceHeight == 320)
+  if (tetris.movingPiece.y + pieceHeight == 320)
   {
     if (!rotate)
     {
@@ -1469,13 +1437,12 @@ char passTimeTetrisGame(void)
 
       if (moveDirectionJoystick == TETRIS_PIECE_MOVE_LEFT || moveDirectionJoystick == TETRIS_PIECE_MOVE_RIGHT)
       {
-        moveDirection |= checkAndUpdateTetrisBoardForCollisions(movingPiece, moveDirectionJoystick);
+        moveDirection |= checkAndUpdateTetrisBoardForCollisions(moveDirectionJoystick);
       }
         
       if (moveDirection == TETRIS_PIECE_FIXED)
       {
-        tetris.tetrisPieces[movingPiece].fixed = true;
-        tetris.movingPiece = false;
+        tetris.movingPiece.enabled = false;
       }
     }
     else
@@ -1485,15 +1452,14 @@ char passTimeTetrisGame(void)
 
       if (moveDirectionJoystick == TETRIS_PIECE_MOVE_LEFT || moveDirectionJoystick == TETRIS_PIECE_MOVE_RIGHT)
       {
-        moveDirection |= checkAndUpdateTetrisBoardForCollisions(movingPiece, moveDirectionJoystick);
+        moveDirection |= checkAndUpdateTetrisBoardForCollisions(moveDirectionJoystick);
       }
       
-      moveDirection |= checkAndUpdateTetrisBoardForCollisions(movingPiece, TETRIS_PIECE_MOVE_DOWN);
+      moveDirection |= checkAndUpdateTetrisBoardForCollisions(TETRIS_PIECE_MOVE_DOWN);
   
       if (moveDirection == TETRIS_PIECE_FIXED)
       {
-        tetris.tetrisPieces[movingPiece].fixed = true;
-        tetris.movingPiece = false;
+        tetris.movingPiece.enabled = false;
       }
     }
   }
@@ -1503,22 +1469,21 @@ char passTimeTetrisGame(void)
     
     if (rotate)
     {
-      moveDirection |= checkAndUpdateTetrisBoardForCollisions(movingPiece, TETRIS_PIECE_ROTATE);
+      moveDirection |= checkAndUpdateTetrisBoardForCollisions(TETRIS_PIECE_ROTATE);
             
       tetris.rotatePiece = false;
     }
     
     if (moveDirectionJoystick == TETRIS_PIECE_MOVE_LEFT || moveDirectionJoystick == TETRIS_PIECE_MOVE_RIGHT)
     {
-      moveDirection |= checkAndUpdateTetrisBoardForCollisions(movingPiece, moveDirectionJoystick);
+      moveDirection |= checkAndUpdateTetrisBoardForCollisions(moveDirectionJoystick);
     }
 
-    moveDirection |= checkAndUpdateTetrisBoardForCollisions(movingPiece, TETRIS_PIECE_MOVE_DOWN);
+    moveDirection |= checkAndUpdateTetrisBoardForCollisions(TETRIS_PIECE_MOVE_DOWN);
     
     if (moveDirection == TETRIS_PIECE_FIXED)
     {
-      tetris.tetrisPieces[movingPiece].fixed = true;
-      tetris.movingPiece = false;
+      tetris.movingPiece.enabled = false;
     }
   }
 
@@ -1605,7 +1570,7 @@ void removeLineFromTetrisBoard(int lineNo)
 
 void removeFullLinesFromTetrisBoard()
 {
-  if (tetris.movingPiece)
+  if (tetris.movingPiece.enabled)
   {
     return;
   }
@@ -1642,14 +1607,19 @@ void playTetris()
   
   lcd.clearScreen();
 
-  tetris.numberOfPieces = 0;
-  tetris.movingPiece = false;
+  tetris.movingPiece.enabled = false;
   tetris.rotatePiece = false;
-  tetris.emptyBoard = true;
   tetris.score = 0;
   
   clearTetrisBoard();
   printTetrisScore();
+
+  // generating the first piece
+
+  generateNewTetrisPiece();    
+  drawTetrisBoard(lastPieceMove);
+  
+  delay(200);
 
   while(true)
   {
