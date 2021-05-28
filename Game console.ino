@@ -2400,7 +2400,7 @@ void generateNextMovement()
     }
   }
 
-  if (freeCells > 1)
+  if ((!moved && freeCells > 1) || (moved && freeCells > 0))
   {
     gameOver = false;
   }
