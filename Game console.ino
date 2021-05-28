@@ -2,6 +2,18 @@
 #include <SPI.h>
 #include "Ucglib.h"
 
+#define BUZZER_PIN 9
+
+#define RGB_LED_R_PIN A8
+#define RGB_LED_G_PIN A9
+#define RGB_LED_B_PIN A10
+
+#define PUSH_BUTTON_0_PIN 19
+#define TIMEOUT_FOR_DEBOUNCE_PUSH_BUTTON_0 500
+
+#define PUSH_BUTTON_1_PIN 20
+#define TIMEOUT_FOR_DEBOUNCE_PUSH_BUTTON_1 500
+
 #define JOYSTICK_OX_PIN A15
 #define JOYSTICK_OY_PIN A14
 #define JOYSTICK_PUSH_PIN 21
@@ -9,11 +21,10 @@
 #define JOYSTICK_LEFT_THRESHOLD 900
 #define JOYSTICK_RIGHT_THRESHOLD 50
 #define JOYSTICK_DOWN_THRESHOLD 900
-#define JOYSTICK_UP_THRESHOLD 50 
+#define JOYSTICK_UP_THRESHOLD 50
+#define TIMEOUT_FOR_DEBOUNCE_PUSH_JOYSTICK 50
 
 #define UNCONNECTED_PIN A0
-
-#define TIMEOUT_FOR_DEBOUNCE 50
 
 #define INITIAL_STATE 0
 #define CHOOSE_GAME_STATE 1
@@ -28,7 +39,11 @@
 Ucglib_ILI9341_18x240x320_HWSPI lcd(/*cd=*/ 48,/*cs=*/ 49,/*reset=*/ 50);
 
 // used for joystick push button's debouncing
-volatile long millisAtPreviousPush = 0;
+volatile long millisAtPreviousPushJoystick = 0;
+// used for push button_0's debouncing
+volatile long millisAtPreviousPushButton0 = 0;
+// used for push button_1's debouncing
+volatile long millisAtPreviousPushButton1 = 0;
 // used for saving the state of the entire game console
 volatile char gameState = INITIAL_STATE;
 // used for selection in menu of the game console
@@ -55,6 +70,17 @@ volatile char gameToPlay = GAME_UNDEFINED;
 #define TETRIS_PIECE_MOVE_RIGHT 4
 #define TETRIS_PIECE_ROTATE 8
 
+#define TETRIS_PLAY_GAME 0
+#define TETRIS_PAUSE_GAME 1
+#define TETRIS_EXIT_GAME 2
+
+#define BOARD_SIZE_2048 6
+
+#define DRAW_FROM_UP_2048_BOARD 0
+#define DRAW_FROM_DOWN_2048_BOARD 1
+#define DRAW_FROM_LEFT_2048_BOARD 2
+#define DRAW_FROM_RIGHT_2048_BOARD 3
+
 typedef struct
 {
   int x;
@@ -71,9 +97,29 @@ typedef struct
   char tetrisBoardPieces[20][16];
   TetrisPiece movingPiece;
   bool rotateMovingPieceDetected;
+  char gamePaused;
 } TetrisGame;
 
-volatile TetrisGame tetris;
+typedef struct
+{
+  unsigned long score;
+  int ticTacToeName;
+} TicTacToeGame;
+
+typedef struct
+{
+  unsigned long score;
+  int board[BOARD_SIZE_2048][BOARD_SIZE_2048];
+} The2048Game;
+
+typedef union
+{
+  TetrisGame tetris;
+  TicTacToeGame ticTacToe;
+  The2048Game the2048;
+} Game;
+
+volatile Game game;
 
 // Game console initialization
 
@@ -81,10 +127,32 @@ ISR(INT0_vect)
 {
   long millisNow = millis();
 
-  if (millisNow - millisAtPreviousPush > TIMEOUT_FOR_DEBOUNCE)
+  if (millisNow - millisAtPreviousPushJoystick > TIMEOUT_FOR_DEBOUNCE_PUSH_JOYSTICK)
   {
-    millisAtPreviousPush = millisNow;
-    pushButtonAction();
+    millisAtPreviousPushJoystick = millisNow;
+    joystickPushButtonAction();
+  } 
+}
+
+ISR(INT1_vect)
+{
+  long millisNow = millis();
+
+  if (millisNow - millisAtPreviousPushButton0 > TIMEOUT_FOR_DEBOUNCE_PUSH_BUTTON_0)
+  {
+    millisAtPreviousPushButton0 = millisNow;
+    pushButton0Action();
+  } 
+}
+
+ISR(INT2_vect)
+{
+  long millisNow = millis();
+
+  if (millisNow - millisAtPreviousPushButton1 > TIMEOUT_FOR_DEBOUNCE_PUSH_BUTTON_1)
+  {
+    millisAtPreviousPushButton1 = millisNow;
+    pushButton1Action();
   } 
 }
 
@@ -94,13 +162,20 @@ void setup()
 
   pinMode(JOYSTICK_OX_PIN, INPUT);
   pinMode(JOYSTICK_OY_PIN, INPUT);
+
+  pinMode(RGB_LED_R_PIN, OUTPUT);
+  pinMode(RGB_LED_G_PIN, OUTPUT);
+  pinMode(RGB_LED_B_PIN, OUTPUT);
   
   cli();
 
   Serial.begin(9600);
 
   EICRA |= (1 << ISC11);
+  
   EIMSK |= (1 << INT0);
+  EIMSK |= (1 << INT1);
+  EIMSK |= (1 << INT2);
 
   sei();
 
@@ -110,10 +185,16 @@ void setup()
 
 void loop()
 {
+  analogWrite(RGB_LED_R_PIN, 230);
+  analogWrite(RGB_LED_G_PIN, 230);
+  analogWrite(RGB_LED_B_PIN, 0);
+  
   gameState = INITIAL_STATE;
   gameSelected = GAME_TETRIS;
   gameToPlay = GAME_UNDEFINED;
   
+  //play2048();
+
   showMenu();
 
   playGame();
@@ -138,7 +219,7 @@ void resetConsole()
   asm volatile ("jmp 0");
 }
 
-void pushButtonAction()
+void joystickPushButtonAction()
 {
   switch (gameState)
   {
@@ -150,13 +231,58 @@ void pushButtonAction()
     }
     case PLAY_GAME_TETRIS:
     {
-      tetris.rotateMovingPieceDetected = true;
+      game.tetris.rotateMovingPieceDetected = true;
 
       break;
     }
     case GAME_OVER_TETRIS:
     {
       gameState = INITIAL_STATE;
+    }
+  }
+}
+
+void pushButton0Action()
+{
+  switch (gameState)
+  {
+    case PLAY_GAME_TETRIS:
+    {
+      if (game.tetris.gamePaused == TETRIS_PLAY_GAME)
+      {
+        game.tetris.gamePaused = TETRIS_PAUSE_GAME;
+      }
+      else if (game.tetris.gamePaused == TETRIS_PAUSE_GAME)
+      {
+        game.tetris.gamePaused = TETRIS_PLAY_GAME;
+      }
+      else if (game.tetris.gamePaused == TETRIS_EXIT_GAME)
+      {
+        // reset the entire console
+        asm volatile ("jmp 0");
+      }
+
+      break;
+    }
+  }
+}
+
+void pushButton1Action()
+{
+  switch (gameState)
+  {
+    case PLAY_GAME_TETRIS:
+    {
+      if (game.tetris.gamePaused == TETRIS_PLAY_GAME)
+      {
+        game.tetris.gamePaused = TETRIS_EXIT_GAME;
+      }
+      else if (game.tetris.gamePaused == TETRIS_EXIT_GAME)
+      {
+        game.tetris.gamePaused = TETRIS_PLAY_GAME;
+      }
+
+      break;
     }
   }
 }
@@ -168,9 +294,9 @@ void showMenu()
   lcd.clearScreen();
 
   // print menu message
-  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Select game:")) / 2, 50);
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Use joystick to select game:")) / 2, 50);
   lcd.setColor(255, 200, 200);
-  lcd.print("Select game:");
+  lcd.print("Use joystick to select game:");
 
   // draw frame for selected option
   lcd.setColor(0, 255, 0);
@@ -285,53 +411,116 @@ void playTetris()
 
   while(true)
   {
+    checkGamePause();
     lastPieceMove = passTimeTetrisGame();
     removeFullLinesFromTetrisBoard();
     generateNewTetrisPiece();    
-    drawMovingTetrisPiece(tetris.movingPiece.x, tetris.movingPiece.y, tetris.movingPiece.rotation, tetris.movingPiece.pieceType, lastPieceMove);
+    drawMovingTetrisPiece(game.tetris.movingPiece.x, game.tetris.movingPiece.y, game.tetris.movingPiece.rotation, game.tetris.movingPiece.pieceType, lastPieceMove);
     printTetrisScore();
     
-    delay(tetris.gameDelay);
+    delay(game.tetris.gameDelay);
   }
 }
 
-void initTetrisGame(void)
+void initTetrisGame()
 {
   int i, j;
 
-  gameState = PLAY_GAME_TETRIS;
-  
   lcd.clearScreen();
 
-  tetris.movingPiece.enabled = false;
-  tetris.rotateMovingPieceDetected = false;
-  tetris.score = 0;
-  tetris.gameDelay = MAXIMUM_GAME_DELAY_TETRIS;
+  game.tetris.gamePaused = TETRIS_PLAY_GAME;
+  game.tetris.movingPiece.enabled = false;
+  game.tetris.rotateMovingPieceDetected = false;
+  game.tetris.score = 0;
+  game.tetris.gameDelay = MAXIMUM_GAME_DELAY_TETRIS;
 
   for (i = 0; i < 20; i++)
   {
     for (j = 0; j < 15; j++)
     {
-      tetris.tetrisBoardPieces[i][j] = NO_PIECE_TETRIS;
+      game.tetris.tetrisBoardPieces[i][j] = NO_PIECE_TETRIS;
     }
 
-    tetris.tetrisBoardPieces[i][j] = WALL_PIECE_TETRIS;
+    game.tetris.tetrisBoardPieces[i][j] = WALL_PIECE_TETRIS;
   }
   
   printTetrisScore();
 
+  gameState = PLAY_GAME_TETRIS;
+
   // generating the first piece
 
   generateNewTetrisPiece();
-  drawMovingTetrisPiece(tetris.movingPiece.x, tetris.movingPiece.y, tetris.movingPiece.rotation, tetris.movingPiece.pieceType, TETRIS_PIECE_FIXED);
+  drawMovingTetrisPiece(game.tetris.movingPiece.x, game.tetris.movingPiece.y, game.tetris.movingPiece.rotation, game.tetris.movingPiece.pieceType, TETRIS_PIECE_FIXED);
   printTetrisScore();
   
-  delay(tetris.gameDelay);
+  delay(game.tetris.gameDelay);
 }
 
-char passTimeTetrisGame(void)
+void checkGamePause()
 {
-  int rotate = tetris.rotateMovingPieceDetected;
+  if (game.tetris.gamePaused == TETRIS_PLAY_GAME)
+  {
+    return;
+  }
+  else if (game.tetris.gamePaused == TETRIS_PAUSE_GAME)
+  {
+    pauseTetris();
+  }
+  else if (game.tetris.gamePaused == TETRIS_EXIT_GAME)
+  {
+    exitTetris();
+  }  
+}
+
+void exitTetris()
+{
+  lcd.clearScreen();
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Do you want to exit?")) / 2, 150);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Do you want to exit?");
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Pause to resume")) / 2, 275);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Press Pause to resume");
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Exit to exit game...")) / 2, 300);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Press Exit to exit game...");
+
+  while(game.tetris.gamePaused == TETRIS_EXIT_GAME);
+
+  resumeTetris();
+}
+
+void pauseTetris()
+{
+  lcd.clearScreen();
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Game paused!")) / 2, 150);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Game paused!");
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press joystick to resume...")) / 2, 275);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Press Pause to resume...");
+
+  while(game.tetris.gamePaused == TETRIS_PAUSE_GAME);
+
+  resumeTetris();
+}
+
+void resumeTetris()
+{
+  printTetrisNonMovingBoard();
+  printTetrisScore();
+  drawMovingTetrisPiece(game.tetris.movingPiece.x, game.tetris.movingPiece.y, game.tetris.movingPiece.rotation, game.tetris.movingPiece.pieceType, TETRIS_PIECE_FIXED);
+}
+
+char passTimeTetrisGame()
+{
+  int rotate = game.tetris.rotateMovingPieceDetected;
   int joystickOX;
   int joystickOY;
   char moveDirectionJoystick = TETRIS_PIECE_MOVE_DOWN;
@@ -351,20 +540,20 @@ char passTimeTetrisGame(void)
 
   if (joystickOY < JOYSTICK_UP_THRESHOLD)
   {
-    tetris.gameDelay += 50;
+    game.tetris.gameDelay += 50;
 
-    if (tetris.gameDelay > MAXIMUM_GAME_DELAY_TETRIS)
+    if (game.tetris.gameDelay > MAXIMUM_GAME_DELAY_TETRIS)
     {
-      tetris.gameDelay = MAXIMUM_GAME_DELAY_TETRIS;
+      game.tetris.gameDelay = MAXIMUM_GAME_DELAY_TETRIS;
     }
   }
   else if (joystickOY > JOYSTICK_DOWN_THRESHOLD)
   {
-    tetris.gameDelay -= 50;
+    game.tetris.gameDelay -= 50;
 
-    if (tetris.gameDelay < 0)
+    if (game.tetris.gameDelay < 0)
     {
-      tetris.gameDelay = 0;
+      game.tetris.gameDelay = 0;
     }
   }
 
@@ -375,20 +564,20 @@ char passTimeTetrisGame(void)
 
   if (rotate)
   {
-    pieceHeight *= getDimensionTetrisPiece(tetris.movingPiece.pieceType, tetris.movingPiece.rotation, true);
-    pieceWidth *= getDimensionTetrisPiece(tetris.movingPiece.pieceType, tetris.movingPiece.rotation, false);
+    pieceHeight *= getDimensionTetrisPiece(game.tetris.movingPiece.pieceType, game.tetris.movingPiece.rotation, true);
+    pieceWidth *= getDimensionTetrisPiece(game.tetris.movingPiece.pieceType, game.tetris.movingPiece.rotation, false);
   }
   else
   {
-    pieceHeight *= getDimensionTetrisPiece(tetris.movingPiece.pieceType, tetris.movingPiece.rotation, false);
-    pieceWidth *= getDimensionTetrisPiece(tetris.movingPiece.pieceType, tetris.movingPiece.rotation, false);
+    pieceHeight *= getDimensionTetrisPiece(game.tetris.movingPiece.pieceType, game.tetris.movingPiece.rotation, false);
+    pieceWidth *= getDimensionTetrisPiece(game.tetris.movingPiece.pieceType, game.tetris.movingPiece.rotation, false);
   }
   
-  if (tetris.movingPiece.y + pieceHeight == 320)
+  if (game.tetris.movingPiece.y + pieceHeight == 320)
   {
     if (!rotate)
     {
-      tetris.rotateMovingPieceDetected = false;
+      game.tetris.rotateMovingPieceDetected = false;
       moveDirection = TETRIS_PIECE_FIXED;
 
       if (moveDirectionJoystick == TETRIS_PIECE_MOVE_LEFT || moveDirectionJoystick == TETRIS_PIECE_MOVE_RIGHT)
@@ -398,12 +587,12 @@ char passTimeTetrisGame(void)
         
       if (moveDirection == TETRIS_PIECE_FIXED)
       {
-        tetris.movingPiece.enabled = false;
+        game.tetris.movingPiece.enabled = false;
       }
     }
     else
     {
-      tetris.rotateMovingPieceDetected = false;
+      game.tetris.rotateMovingPieceDetected = false;
       moveDirection = TETRIS_PIECE_FIXED;
 
       if (moveDirectionJoystick == TETRIS_PIECE_MOVE_LEFT || moveDirectionJoystick == TETRIS_PIECE_MOVE_RIGHT)
@@ -415,7 +604,7 @@ char passTimeTetrisGame(void)
   
       if (moveDirection == TETRIS_PIECE_FIXED)
       {
-        tetris.movingPiece.enabled = false;
+        game.tetris.movingPiece.enabled = false;
       }
     }
   }
@@ -427,7 +616,7 @@ char passTimeTetrisGame(void)
     {
       moveDirection |= checkAndUpdateTetrisBoardForCollisions(TETRIS_PIECE_ROTATE);
             
-      tetris.rotateMovingPieceDetected = false;
+      game.tetris.rotateMovingPieceDetected = false;
     }
     
     if (moveDirectionJoystick == TETRIS_PIECE_MOVE_LEFT || moveDirectionJoystick == TETRIS_PIECE_MOVE_RIGHT)
@@ -439,7 +628,7 @@ char passTimeTetrisGame(void)
     
     if (moveDirection == TETRIS_PIECE_FIXED)
     {
-      tetris.movingPiece.enabled = false;
+      game.tetris.movingPiece.enabled = false;
     }
   }
 
@@ -485,12 +674,12 @@ int getDimensionTetrisPiece(char pieceType, int rotation, bool oXDimension)
 
 char checkAndUpdateTetrisBoardForCollisions(char moveDirection)
 {
-  int x = tetris.movingPiece.x / 16;
-  int y = tetris.movingPiece.y / 16;
+  int x = game.tetris.movingPiece.x / 16;
+  int y = game.tetris.movingPiece.y / 16;
   int dx = 0;
   int dy = 0;
-  int pieceType = tetris.movingPiece.pieceType;
-  int rotation = tetris.movingPiece.rotation;
+  int pieceType = game.tetris.movingPiece.pieceType;
+  int rotation = game.tetris.movingPiece.rotation;
   bool collision = false;
 
   if (moveDirection == TETRIS_PIECE_MOVE_DOWN)
@@ -537,7 +726,7 @@ char checkAndUpdateTetrisBoardForCollisions(char moveDirection)
     else
     {
       modifyTetrisPieceFromBoard(x, y, pieceType, rotation, true);
-      tetris.movingPiece.rotation = rotation;  
+      game.tetris.movingPiece.rotation = rotation;  
     }         
   }
   else if (moveDirection != TETRIS_PIECE_FIXED)
@@ -562,8 +751,8 @@ char checkAndUpdateTetrisBoardForCollisions(char moveDirection)
   }
   else
   {
-    tetris.movingPiece.x += 16 * dx;
-    tetris.movingPiece.y += 16 * dy;
+    game.tetris.movingPiece.x += 16 * dx;
+    game.tetris.movingPiece.y += 16 * dy;
   }
 
   return moveDirection;
@@ -577,13 +766,13 @@ bool checkTetrisPieceOnTable(int x, int y, int pieceType, int rotation)
     {
       if (rotation == 0 || rotation == 180)
       {
-        return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
-                  || tetris.tetrisBoardPieces[y][x + 2] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y][x + 3] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
+                  || game.tetris.tetrisBoardPieces[y][x + 2] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y][x + 3] != NO_PIECE_TETRIS;
       }
       else
       {
-        return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
-                  || tetris.tetrisBoardPieces[y + 2][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 3][x] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
+                  || game.tetris.tetrisBoardPieces[y + 2][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 3][x] != NO_PIECE_TETRIS;
       }
       
       break;
@@ -592,23 +781,23 @@ bool checkTetrisPieceOnTable(int x, int y, int pieceType, int rotation)
     {
       if (rotation == 0)
       {
-        return tetris.tetrisBoardPieces[y][x + 2] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x + 2] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x + 2] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x + 2] != NO_PIECE_TETRIS;
       }
       else if (rotation == 90)
       {
-        return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 2][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 2][x + 1] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 2][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 2][x + 1] != NO_PIECE_TETRIS;
       }
       else if (rotation == 180)
       {
-        return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y][x + 2] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y][x + 2] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS;
       }
       else
       {
-        return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 2][x + 1] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 2][x + 1] != NO_PIECE_TETRIS;
       }
       break;
     }
@@ -616,31 +805,31 @@ bool checkTetrisPieceOnTable(int x, int y, int pieceType, int rotation)
     {
       if (rotation == 0)
       {
-        return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x + 2] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x + 2] != NO_PIECE_TETRIS;
       }
       else if (rotation == 90)
       {
-        return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 2][x] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 2][x] != NO_PIECE_TETRIS;
       }
       else if (rotation == 180)
       {
-        return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y][x + 2] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x + 2] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y][x + 2] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x + 2] != NO_PIECE_TETRIS;
       }
       else
       {
-        return tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 2][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 2][x + 1] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 2][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 2][x + 1] != NO_PIECE_TETRIS;
       }
       
       break;
     }
     case O_PIECE_TETRIS:
     {
-      return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS;
+      return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS;
       
       break;
     }
@@ -648,13 +837,13 @@ bool checkTetrisPieceOnTable(int x, int y, int pieceType, int rotation)
     {
       if (rotation == 0 || rotation == 180)
       {
-        return tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y][x + 2] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y][x + 2] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS;
       }
       else
       {
-        return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 2][x + 1] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 2][x + 1] != NO_PIECE_TETRIS;
       }
       
       break;
@@ -663,23 +852,23 @@ bool checkTetrisPieceOnTable(int x, int y, int pieceType, int rotation)
     {
       if (rotation == 0)
       {
-        return tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x + 2] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x + 2] != NO_PIECE_TETRIS;
       }
       else if (rotation == 90)
       {
-        return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 2][x] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 2][x] != NO_PIECE_TETRIS;
       }
       else if (rotation == 180)
       {
-        return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y][x + 2] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y][x + 2] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS;
       }
       else
       {
-        return tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 2][x + 1] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 2][x + 1] != NO_PIECE_TETRIS;
       }
       
       break;
@@ -688,13 +877,13 @@ bool checkTetrisPieceOnTable(int x, int y, int pieceType, int rotation)
     {
       if (rotation == 0 || rotation == 180)
       {
-        return tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x + 2] != NO_PIECE_TETRIS;       
+        return game.tetris.tetrisBoardPieces[y][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x + 2] != NO_PIECE_TETRIS;       
       }
       else
       {
-        return tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
-                || tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[y + 2][x] != NO_PIECE_TETRIS;
+        return game.tetris.tetrisBoardPieces[y][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 1][x] != NO_PIECE_TETRIS
+                || game.tetris.tetrisBoardPieces[y + 1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[y + 2][x] != NO_PIECE_TETRIS;
       }
       
       break;
@@ -719,17 +908,17 @@ void modifyTetrisPieceFromBoard(int x, int y, int pieceType, int rotation, int n
     {
       if (rotation == 0 || rotation == 180)
       {
-        tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 2] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 3] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 2] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 3] = tetrisBoardPiece;
       }
       else
       {
-        tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 2][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 3][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 2][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 3][x] = tetrisBoardPiece;
       }
       
       break;
@@ -738,31 +927,31 @@ void modifyTetrisPieceFromBoard(int x, int y, int pieceType, int rotation, int n
     {
       if (rotation == 0)
       {
-        tetris.tetrisBoardPieces[y][x + 2] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 2] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 2] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 2] = tetrisBoardPiece;
       }
       else if (rotation == 90)
       {
-        tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 2][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 2][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 2][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 2][x + 1] = tetrisBoardPiece;
       }
       else if (rotation == 180)
       {
-        tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 2] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 2] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
       }
       else
       {
-        tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 2][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 2][x + 1] = tetrisBoardPiece;
       }
       break;
     }
@@ -770,41 +959,41 @@ void modifyTetrisPieceFromBoard(int x, int y, int pieceType, int rotation, int n
     {
       if (rotation == 0)
       {
-        tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 2] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 2] = tetrisBoardPiece;
       }
       else if (rotation == 90)
       {
-        tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 2][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 2][x] = tetrisBoardPiece;
       }
       else if (rotation == 180)
       {
-        tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 2] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 2] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 2] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 2] = tetrisBoardPiece;
       }
       else
       {
-        tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 2][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 2][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 2][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 2][x + 1] = tetrisBoardPiece;
       }
       
       break;
     }
     case O_PIECE_TETRIS:
     {
-      tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-      tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-      tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
-      tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+      game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+      game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+      game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+      game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
       
       break;
     }
@@ -812,17 +1001,17 @@ void modifyTetrisPieceFromBoard(int x, int y, int pieceType, int rotation, int n
     {
       if (rotation == 0 || rotation == 180)
       {
-        tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 2] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 2] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
       }
       else
       {
-        tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 2][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 2][x + 1] = tetrisBoardPiece;
       }
       
       break;
@@ -831,31 +1020,31 @@ void modifyTetrisPieceFromBoard(int x, int y, int pieceType, int rotation, int n
     {
       if (rotation == 0)
       {
-        tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 2] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 2] = tetrisBoardPiece;
       }
       else if (rotation == 90)
       {
-        tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 2][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 2][x] = tetrisBoardPiece;
       }
       else if (rotation == 180)
       {
-        tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 2] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 2] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
       }
       else
       {
-        tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 2][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 2][x + 1] = tetrisBoardPiece;
       }
       
       break;
@@ -864,17 +1053,17 @@ void modifyTetrisPieceFromBoard(int x, int y, int pieceType, int rotation, int n
     {
       if (rotation == 0 || rotation == 180)
       {
-        tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 2] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 2] = tetrisBoardPiece;
       }
       else
       {
-        tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
-        tetris.tetrisBoardPieces[y + 2][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 1][x + 1] = tetrisBoardPiece;
+        game.tetris.tetrisBoardPieces[y + 2][x] = tetrisBoardPiece;
       }
       
       break;
@@ -888,7 +1077,7 @@ void modifyTetrisPieceFromBoard(int x, int y, int pieceType, int rotation, int n
 
 void removeFullLinesFromTetrisBoard()
 {
-  if (tetris.movingPiece.enabled)
+  if (game.tetris.movingPiece.enabled)
   {
     return;
   }
@@ -902,7 +1091,7 @@ void removeFullLinesFromTetrisBoard()
 
     for (j = 0 ; j < 15; j++)
     {
-      if (tetris.tetrisBoardPieces[i][j] == NO_PIECE_TETRIS)
+      if (game.tetris.tetrisBoardPieces[i][j] == NO_PIECE_TETRIS)
       {
         fullLine = false;
         break;
@@ -925,24 +1114,35 @@ void removeLineFromTetrisBoard(int lineNo)
   {
     for (j = 0; j < 15; j++)
     {
-      tetris.tetrisBoardPieces[i + 1][j] = tetris.tetrisBoardPieces[i][j];
+      game.tetris.tetrisBoardPieces[i + 1][j] = game.tetris.tetrisBoardPieces[i][j];
     }
   }
 
   for (j = 0; j < 15; j++)
   {
-    tetris.tetrisBoardPieces[0][j] = NO_PIECE_TETRIS;
+    game.tetris.tetrisBoardPieces[0][j] = NO_PIECE_TETRIS;
   }
 
+  printTetrisNonMovingBoard();
+
+  game.tetris.score += 10;
+
+  printTetrisScore();
+}
+
+void printTetrisNonMovingBoard()
+{
+  int i, j;
+  
   lcd.clearScreen();
 
   for (i = 19; i >= 0; i--)
   {
     for (j = 0; j < 15; j++)
     {
-      if(tetris.tetrisBoardPieces[i][j] != NO_PIECE_TETRIS)
+      if(game.tetris.tetrisBoardPieces[i][j] != NO_PIECE_TETRIS)
       {
-        switch(tetris.tetrisBoardPieces[i][j])
+        switch(game.tetris.tetrisBoardPieces[i][j])
         {
           case I_PIECE_TETRIS:
           {
@@ -989,10 +1189,6 @@ void removeLineFromTetrisBoard(int lineNo)
       }
     }
   }
-
-  tetris.score += 10;
-
-  printTetrisScore();
 }
 
 void printTetrisScore()
@@ -1003,7 +1199,7 @@ void printTetrisScore()
   lcd.setColor(160, 160, 200);
   lcd.print("Score: ");
   
-  if (lastScore != tetris.score)
+  if (lastScore != game.tetris.score)
   {
     lcd.setPrintPos(60, 16);
     lcd.setColor(0, 0, 0);
@@ -1012,14 +1208,14 @@ void printTetrisScore()
 
   lcd.setPrintPos(60, 16);
   lcd.setColor(160, 160, 200);
-  lcd.print(String(tetris.score));
+  lcd.print(String(game.tetris.score));
 
-  lastScore = tetris.score;
+  lastScore = game.tetris.score;
 }
 
-void generateNewTetrisPiece(void)
+void generateNewTetrisPiece()
 {
-  if (tetris.movingPiece.enabled)
+  if (game.tetris.movingPiece.enabled)
   {
     return;
   }
@@ -1028,7 +1224,7 @@ void generateNewTetrisPiece(void)
   int rotation = 0;
   int x;
 
-  tetris.gameDelay = MAXIMUM_GAME_DELAY_TETRIS;
+  game.tetris.gameDelay = MAXIMUM_GAME_DELAY_TETRIS;
 
   if (pieceType == I_PIECE_TETRIS)
   {
@@ -1039,13 +1235,13 @@ void generateNewTetrisPiece(void)
     x = 6;
   }
   
-  tetris.movingPiece.pieceType = pieceType;
-  tetris.movingPiece.rotation = rotation;
-  tetris.movingPiece.y = 0;
-  tetris.movingPiece.x = 16 * x;
-  tetris.movingPiece.enabled = true;
+  game.tetris.movingPiece.pieceType = pieceType;
+  game.tetris.movingPiece.rotation = rotation;
+  game.tetris.movingPiece.y = 0;
+  game.tetris.movingPiece.x = 16 * x;
+  game.tetris.movingPiece.enabled = true;
   
-  tetris.score++;  
+  game.tetris.score++;  
 
   switch(pieceType)
   {
@@ -1053,29 +1249,29 @@ void generateNewTetrisPiece(void)
     {
       if (rotation == 0 || rotation == 180)
       {
-        if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[0][x + 2] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[0][x + 3] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[0][x + 2] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[0][x + 3] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = I_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 1] = I_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 2] = I_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 3] = I_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = I_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = I_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 2] = I_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 3] = I_PIECE_TETRIS;
       }
       else
       {
-        if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[2][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[3][x] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[2][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[3][x] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = I_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = I_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[2][x] = I_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[3][x] = I_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = I_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = I_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[2][x] = I_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[3][x] = I_PIECE_TETRIS;
       }
 
       break;
@@ -1084,55 +1280,55 @@ void generateNewTetrisPiece(void)
     {
       if (rotation == 0)
       {
-        if (tetris.tetrisBoardPieces[0][x + 2] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x + 2] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x + 2] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x + 2] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x + 2] = L_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = L_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = L_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 2] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 2] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 2] = L_PIECE_TETRIS;
       }
       else if (rotation == 90)
       {
-        if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[2][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[2][x + 1] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[2][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[2][x + 1] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = L_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = L_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[2][x] = L_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[3][x + 1] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[2][x] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[3][x + 1] = L_PIECE_TETRIS;
       }
       else if (rotation == 180)
       {
-        if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[0][x + 2] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[0][x + 2] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = L_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 1] = L_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 2] = L_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 2] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = L_PIECE_TETRIS;
       }
       else
       {
-        if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[2][x + 1] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[2][x + 1] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = L_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 1] = L_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = L_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[2][x + 1] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = L_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[2][x + 1] = L_PIECE_TETRIS;
       }
 
       break;
@@ -1141,71 +1337,71 @@ void generateNewTetrisPiece(void)
     {
       if (rotation == 0)
       {
-        if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x + 2] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x + 2] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = J_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = J_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = J_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 2] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 2] = J_PIECE_TETRIS;
       }
       else if (rotation == 90)
       {
-        if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[2][x] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[2][x] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = J_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 1] = J_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = J_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[2][x] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[2][x] = J_PIECE_TETRIS;
       }
       else if (rotation == 180)
       {
-        if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[0][x + 2] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x + 2] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[0][x + 2] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x + 2] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = J_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 1] = J_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 2] = J_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 2] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 2] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 2] = J_PIECE_TETRIS;
       }
       else
       {
-        if (tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[2][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[2][x + 1] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[2][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[2][x + 1] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x + 1] = J_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = J_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[2][x] = J_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[2][x + 1] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[2][x] = J_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[2][x + 1] = J_PIECE_TETRIS;
       }
 
       break;
     }
     case O_PIECE_TETRIS:
     {
-      if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS)
+      if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = O_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 1] = O_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = O_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = O_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = O_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = O_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = O_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = O_PIECE_TETRIS;
 
         break;
     }
@@ -1213,29 +1409,29 @@ void generateNewTetrisPiece(void)
     {
       if (rotation == 0 || rotation == 180)
       {
-        if (tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[0][x + 2] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[0][x + 2] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x + 1] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 2] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 2] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = S_PIECE_TETRIS;
       }
       else
       {
-        if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[2][x + 1] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[2][x + 1] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[2][x + 1] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[2][x + 1] = S_PIECE_TETRIS;
       }
 
       break;
@@ -1244,55 +1440,55 @@ void generateNewTetrisPiece(void)
     {
       if (rotation == 0)
       {
-        if (tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x + 2] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x + 2] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x + 1] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 2] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 2] = S_PIECE_TETRIS;
       }
       else if (rotation == 90)
       {
-        if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[2][x] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[2][x] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[2][x] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[2][x] = S_PIECE_TETRIS;
       }
       else if (rotation == 180)
       {
-        if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[0][x + 2] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[0][x + 2] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 1] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 2] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 2] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = S_PIECE_TETRIS;
       }
       else
       {
-        if (tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[2][x + 1] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[2][x + 1] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x + 1] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = S_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[2][x + 1] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = S_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[2][x + 1] = S_PIECE_TETRIS;
       }
 
       break;
@@ -1301,29 +1497,29 @@ void generateNewTetrisPiece(void)
     {
       if (rotation == 0 || rotation == 180)
       {
-        if (tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x + 2] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x + 2] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x] = Z_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[0][x + 1] = Z_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = Z_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 2] = Z_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x] = Z_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = Z_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = Z_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 2] = Z_PIECE_TETRIS;
       }
       else
       {
-        if (tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
-              || tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || tetris.tetrisBoardPieces[2][x] != NO_PIECE_TETRIS)
+        if (game.tetris.tetrisBoardPieces[0][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[1][x] != NO_PIECE_TETRIS
+              || game.tetris.tetrisBoardPieces[1][x + 1] != NO_PIECE_TETRIS || game.tetris.tetrisBoardPieces[2][x] != NO_PIECE_TETRIS)
         {
           tetrisGameOver();
         }
         
-        tetris.tetrisBoardPieces[0][x + 1] = Z_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x] = Z_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[1][x + 1] = Z_PIECE_TETRIS;
-        tetris.tetrisBoardPieces[2][x] = Z_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[0][x + 1] = Z_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x] = Z_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[1][x + 1] = Z_PIECE_TETRIS;
+        game.tetris.tetrisBoardPieces[2][x] = Z_PIECE_TETRIS;
       }
 
       break;
@@ -1376,6 +1572,9 @@ void drawMovingTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceT
     }
     case TETRIS_PIECE_ROTATE:
     {
+      tone(9, 500, 50);
+      delay(50);
+      
       drawTetrisPiece(offsetOX, offsetOY, (rotation + 270) % 360, pieceType, false);
       drawTetrisPiece(offsetOX, offsetOY, rotation, pieceType, true);
       
@@ -1383,6 +1582,9 @@ void drawMovingTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceT
     }
     case TETRIS_PIECE_MOVE_DOWN | TETRIS_PIECE_ROTATE:
     {
+      tone(9, 500, 50);
+      delay(50);
+      
       drawTetrisPiece(offsetOX, offsetOY - 16, (rotation + 270) % 360, pieceType, false);
       drawTetrisPiece(offsetOX, offsetOY, rotation, pieceType, true);
 
@@ -1390,6 +1592,9 @@ void drawMovingTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceT
     }
     case TETRIS_PIECE_MOVE_LEFT | TETRIS_PIECE_ROTATE:
     {
+      tone(9, 500, 50);
+      delay(50);
+      
       drawTetrisPiece(offsetOX + 16, offsetOY, (rotation + 270) % 360, pieceType, false);
       drawTetrisPiece(offsetOX, offsetOY, rotation, pieceType, true);
 
@@ -1404,6 +1609,9 @@ void drawMovingTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceT
     }
     case TETRIS_PIECE_MOVE_DOWN | TETRIS_PIECE_MOVE_LEFT | TETRIS_PIECE_ROTATE:
     {
+      tone(9, 500, 50);
+      delay(50);
+      
       drawTetrisPiece(offsetOX + 16, offsetOY - 16, (rotation + 270) % 360, pieceType, false);
       drawTetrisPiece(offsetOX, offsetOY, rotation, pieceType, true);
 
@@ -1411,6 +1619,9 @@ void drawMovingTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceT
     }
     case TETRIS_PIECE_MOVE_DOWN | TETRIS_PIECE_MOVE_RIGHT | TETRIS_PIECE_ROTATE:
     {
+      tone(9, 500, 50);
+      delay(50);
+      
       drawTetrisPiece(offsetOX - 16, offsetOY - 16, (rotation + 270) % 360, pieceType, false);
       drawTetrisPiece(offsetOX, offsetOY, rotation, pieceType, true);
 
@@ -1624,7 +1835,7 @@ void drawTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceType, b
 void tetrisGameOver()
 {
   char score[15];
-  sprintf(score, "%lu", tetris.score);
+  sprintf(score, "%lu", game.tetris.score);
   
   lcd.clearScreen();
 
@@ -1674,8 +1885,129 @@ void play2048()
 {
   lcd.clearScreen();
 
-  // print menu message
-  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("2048")) / 2, 25);
-  lcd.setColor(255, 200, 200);
-  lcd.print("2048");
+  init2048Game();
+
+  while(true)
+  {
+    ;
+  }
+}
+
+void init2048Game()
+{
+  game.the2048.score = 0;
+
+  print2048Score();
+
+  draw2048Board(DRAW_FROM_UP_2048_BOARD);
+  delay(500);
+
+  lcd.clearScreen();
+
+  draw2048Board(DRAW_FROM_DOWN_2048_BOARD);
+  delay(500);
+
+  lcd.clearScreen();
+
+  draw2048Board(DRAW_FROM_LEFT_2048_BOARD);
+  delay(500);
+
+  lcd.clearScreen();
+
+  draw2048Board(DRAW_FROM_RIGHT_2048_BOARD);
+  delay(500);
+}
+
+void print2048Score()
+{
+  static unsigned long lastScore = 0;
+
+  lcd.setFont(ucg_font_ncenR14_tr);
+  lcd.setPrintPos(0, 16);
+  lcd.setColor(160, 160, 200);
+  lcd.print("Score: ");
+  
+  if (lastScore != game.the2048.score)
+  {
+    lcd.setPrintPos(60, 16);
+    lcd.setColor(0, 0, 0);
+    lcd.print(String(lastScore));
+  }
+
+  lcd.setPrintPos(60, 16);
+  lcd.setColor(160, 160, 200);
+  lcd.print(String(game.the2048.score));
+
+  lastScore = game.the2048.score;
+}
+
+void draw2048Board(char drawDirection)
+{
+  int i, j;
+  int tileSize = lcd.getWidth() / BOARD_SIZE_2048;
+  int oYOffset = (lcd.getHeight() - (BOARD_SIZE_2048 * tileSize));
+  int oXOffset = (lcd.getWidth() - (BOARD_SIZE_2048 * tileSize)) / 2;
+
+  lcd.setColor(0, 255, 255);
+  lcd.setFont(ucg_font_amstrad_cpc_8f);
+  
+  switch(drawDirection)
+  {
+    case DRAW_FROM_UP_2048_BOARD:
+    {
+      for (i = 0; i < BOARD_SIZE_2048; i++)
+      {
+        for (j = 0; j < BOARD_SIZE_2048; j++)
+        {
+          game.the2048.board[i][j] = 0;
+          
+          lcd.drawRFrame(oXOffset + j * tileSize, oYOffset + i * tileSize, tileSize, tileSize, 4);
+        }
+      }
+      
+      break;
+    }
+    case DRAW_FROM_DOWN_2048_BOARD:
+    {
+      for (i = BOARD_SIZE_2048 - 1; i >= 0; i--)
+      {
+        for (j = 0; j < BOARD_SIZE_2048; j++)
+        {
+          game.the2048.board[i][j] = 0;
+          
+          lcd.drawRFrame(oXOffset + j * tileSize, oYOffset + i * tileSize, tileSize, tileSize, 4);
+        }
+      }
+      
+      break;
+    }
+    case DRAW_FROM_LEFT_2048_BOARD:
+    {
+      for (i = 0; i < BOARD_SIZE_2048; i++)
+      {
+        for (j = 0; j < BOARD_SIZE_2048; j++)
+        {
+          game.the2048.board[i][j] = 0;
+          
+          lcd.drawRFrame(oXOffset + i * tileSize, oYOffset + j * tileSize, tileSize, tileSize, 4);
+        }
+      }
+      
+      break;
+    }
+    case DRAW_FROM_RIGHT_2048_BOARD:
+    {
+      for (i = BOARD_SIZE_2048 - 1; i >= 0; i--)
+      {
+        for (j = 0; j < BOARD_SIZE_2048; j++)
+        {
+          game.the2048.board[i][j] = 0;
+          
+          lcd.drawRFrame(oXOffset + i * tileSize, oYOffset + j * tileSize, tileSize, tileSize, 4);
+        }
+      }
+      
+      break;
+    }
+  }
 }
