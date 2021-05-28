@@ -35,6 +35,8 @@
 #define GAME_OVER_TETRIS 3
 #define PLAY_GAME_2048 4
 #define GAME_OVER_THE_2048 5
+#define PLAY_GAME_TIC_TAC_TOE 6
+#define GAME_OVER_TIC_TAC_TOE 7
 
 #define GAME_UNDEFINED -1
 #define GAME_TETRIS 0
@@ -56,6 +58,7 @@ volatile char gameSelected = GAME_TETRIS;
 // used for sending the game selection from ISR to the showMenu function
 volatile char gameToPlay = GAME_UNDEFINED;
 
+// Tetris related constants
 #define MAXIMUM_GAME_DELAY_TETRIS 250
 
 #define NUMBER_OF_PIECES_TETRIS 7
@@ -79,7 +82,10 @@ volatile char gameToPlay = GAME_UNDEFINED;
 #define TETRIS_PAUSE_GAME 1
 #define TETRIS_EXIT_GAME 2
 
+// 2048 related constants
 #define BOARD_SIZE_2048 5
+
+#define GAME_DELAY_2048 100
 
 #define PLAYER_MOVE_UNDEFINED_2048 -1
 
@@ -91,6 +97,30 @@ volatile char gameToPlay = GAME_UNDEFINED;
 #define THE_2048_PLAY_GAME 0
 #define THE_2048_PAUSE_GAME 1
 #define THE_2048_EXIT_GAME 2
+
+// Tic-Tac-Toe related constants
+#define BOARD_SIZE_TIC_TAC_TOE 3
+
+#define GAME_DELAY_TIC_TAC_TOE 100
+
+#define UNDEFINED_PLAYER_TIC_TAC_TOE 0
+#define X_PLAYER_TIC_TAC_TOE 1
+#define O_PLAYER_TIC_TAC_TOE 2
+
+#define PLAYER_MOVE_UNDEFINED_TIC_TAC_TOE -1
+
+#define PLAYER_MOVE_UP_TIC_TAC_TOE 0
+#define PLAYER_MOVE_DOWN_TIC_TAC_TOE 1
+#define PLAYER_MOVE_LEFT_TIC_TAC_TOE 2
+#define PLAYER_MOVE_RIGHT_TIC_TAC_TOE 3
+
+#define PLAYER_WON_TIC_TAC_TOE 0
+#define TIE_TIC_TAC_TOE 1
+#define PLAYER_LOST_TIC_TAC_TOE 2
+
+#define TIC_TAC_TOE_PLAY_GAME 0
+#define TIC_TAC_TOE_PAUSE_GAME 1
+#define TIC_TAC_TOE_EXIT_GAME 2
 
 typedef struct
 {
@@ -113,8 +143,11 @@ typedef struct
 
 typedef struct
 {
-  unsigned long score;
-  int ticTacToeName;
+  char selectorOX;
+  char selectorOY;
+  bool nextMoveSelected;
+  char board[BOARD_SIZE_TIC_TAC_TOE][BOARD_SIZE_TIC_TAC_TOE];
+  char gamePaused;
 } TicTacToeGame;
 
 typedef struct
@@ -271,6 +304,18 @@ void joystickPushButtonAction()
 
       break;
     }
+    case PLAY_GAME_TIC_TAC_TOE:
+    {
+      game.ticTacToe.nextMoveSelected = true;
+
+      break;
+    }
+    case GAME_OVER_TIC_TAC_TOE:
+    {
+      gameState = INITIAL_STATE;
+
+      break;
+    }
   }
 }
 
@@ -291,6 +336,16 @@ void pushButtonBlueAction()
     case PLAY_GAME_2048:
     {
       if (game.the2048.gamePaused == THE_2048_PAUSE_GAME)
+      {
+        // reset the entire console
+        asm volatile ("jmp 0");
+      }
+
+      break;
+    }
+    case PLAY_GAME_TIC_TAC_TOE:
+    {
+      if (game.ticTacToe.gamePaused == TIC_TAC_TOE_PAUSE_GAME)
       {
         // reset the entire console
         asm volatile ("jmp 0");
@@ -327,6 +382,19 @@ void pushButtonRedAction()
       else if (game.the2048.gamePaused == THE_2048_PAUSE_GAME)
       {
         game.the2048.gamePaused = THE_2048_PLAY_GAME;
+      }
+
+      break;
+    }
+    case PLAY_GAME_TIC_TAC_TOE:
+    {
+      if (game.ticTacToe.gamePaused == TIC_TAC_TOE_PLAY_GAME)
+      {
+        game.ticTacToe.gamePaused = TIC_TAC_TOE_PAUSE_GAME;
+      }
+      else if (game.ticTacToe.gamePaused == TIC_TAC_TOE_PAUSE_GAME)
+      {
+        game.ticTacToe.gamePaused = TIC_TAC_TOE_PLAY_GAME;
       }
 
       break;
@@ -426,7 +494,7 @@ void showMenu()
   }
 }
 
-// Games implementations
+// Games' implementations
 
 void playGame()
 {
@@ -513,32 +581,7 @@ void checkTetrisGamePause()
   else if (game.tetris.gamePaused == TETRIS_PAUSE_GAME)
   {
     pauseTetris();
-  }
-  else if (game.tetris.gamePaused == TETRIS_EXIT_GAME)
-  {
-    exitTetris();
-  }  
-}
-
-void exitTetris()
-{
-  lcd.clearScreen();
-
-  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Do you want to exit?")) / 2, 150);
-  lcd.setColor(255, 200, 200);
-  lcd.print("Do you want to exit?");
-
-  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Pause to resume")) / 2, 275);
-  lcd.setColor(255, 200, 200);
-  lcd.print("Press Pause to resume");
-
-  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Exit to exit game...")) / 2, 300);
-  lcd.setColor(255, 200, 200);
-  lcd.print("Press Exit to exit game...");
-
-  while(game.tetris.gamePaused == TETRIS_EXIT_GAME);
-
-  resumeTetris();
+  } 
 }
 
 void pauseTetris()
@@ -1937,11 +1980,483 @@ void tetrisGameOver()
 void playTicTacToe()
 {
   lcd.clearScreen();
+  
+  initTicTacToeGame();
 
-  // print menu message
-  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Tic-Tac_Toe")) / 2, 25);
+  while(true)
+  {
+    waitAndUpdatePlayerMoveTicTacToeGame();
+
+    checkIfPlayerWonAndMove();
+  }
+}
+
+void initTicTacToeGame()
+{  
+  for (int i = 0; i < BOARD_SIZE_TIC_TAC_TOE; i++)
+  {
+    for (int j = 0; j < BOARD_SIZE_TIC_TAC_TOE; j++)
+    {
+      game.ticTacToe.board[i][j] = UNDEFINED_PLAYER_TIC_TAC_TOE;
+    }
+  }
+
+  game.ticTacToe.gamePaused = TIC_TAC_TOE_PLAY_GAME;
+  game.ticTacToe.selectorOX = 0;
+  game.ticTacToe.selectorOY = 0;
+  game.ticTacToe.nextMoveSelected = false;
+
+  drawTicTacToeBoard();
+
+  gameState = PLAY_GAME_TIC_TAC_TOE;
+}
+
+void drawTicTacToeBoard()
+{
+  int tileSize = lcd.getWidth() / BOARD_SIZE_TIC_TAC_TOE;
+  int oYOffset = (lcd.getHeight() - (BOARD_SIZE_TIC_TAC_TOE * tileSize)) / 2;
+  int oXOffset = (lcd.getWidth() - (BOARD_SIZE_TIC_TAC_TOE * tileSize)) / 2;
+  int i, j;
+  
+  for (i = 0; i < BOARD_SIZE_TIC_TAC_TOE; i++)
+  {
+    for (j = 0; j < BOARD_SIZE_TIC_TAC_TOE; j++)
+    {
+      lcd.setColor(255, 200, 200);
+      lcd.drawRFrame(oXOffset + j * tileSize, oYOffset + i * tileSize, tileSize, tileSize, 4);
+      
+      lcd.setColor(0, 0, 0);
+      lcd.drawRBox(oXOffset + j * tileSize + 1, oYOffset + i * tileSize + 1, tileSize - 2, tileSize - 2, 4);
+
+      if (game.ticTacToe.board[i][j] == X_PLAYER_TIC_TAC_TOE)
+      {
+        lcd.setColor(0, 255, 0);
+        lcd.drawLine(oXOffset + j * tileSize + 0.35 * (tileSize / 2), oYOffset + i * tileSize + 0.35 * (tileSize / 2), oXOffset + j * tileSize + 1.65 * (tileSize / 2), oYOffset + i * tileSize + 1.65 * (tileSize / 2));
+        lcd.drawLine(oXOffset + j * tileSize + 1.65 * (tileSize / 2), oYOffset + i * tileSize + 0.35 * (tileSize / 2), oXOffset + j * tileSize + 0.35 * (tileSize / 2), oYOffset + i * tileSize + 1.65 * (tileSize / 2));
+      }
+      else if (game.ticTacToe.board[i][j] == O_PLAYER_TIC_TAC_TOE)
+      {
+        lcd.setColor(255, 0, 0);
+        lcd.drawCircle(oXOffset + j * tileSize + tileSize / 2, oYOffset + i * tileSize + tileSize / 2, 0.65 * (tileSize / 2), UCG_DRAW_ALL);
+      }      
+    }
+  }
+
+  drawCursorTicTacToeGame(false);
+}
+
+void drawCursorTicTacToeGame(bool removeCursor)
+{
+  int tileSize = lcd.getWidth() / BOARD_SIZE_TIC_TAC_TOE;
+  int oYOffset = (lcd.getHeight() - (BOARD_SIZE_TIC_TAC_TOE * tileSize)) / 2;
+  int oXOffset = (lcd.getWidth() - (BOARD_SIZE_TIC_TAC_TOE * tileSize)) / 2;
+  int i, j;
+
+  i = game.ticTacToe.selectorOX;
+  j = game.ticTacToe.selectorOY;
+
+  if (!removeCursor)
+  {
+    lcd.setColor(0, 255, 255);
+  }
+  else
+  {
+    lcd.setColor(0, 0, 0);
+  }
+  
+  lcd.drawRFrame(oXOffset + i * tileSize + 4, oYOffset + j * tileSize + 4, tileSize - 8, tileSize - 8, 4);
+}
+
+void waitAndUpdatePlayerMoveTicTacToeGame()
+{
+  int tileSize = lcd.getWidth() / BOARD_SIZE_TIC_TAC_TOE;
+  int oYOffset = (lcd.getHeight() - (BOARD_SIZE_TIC_TAC_TOE * tileSize)) / 2;
+  int oXOffset = (lcd.getWidth() - (BOARD_SIZE_TIC_TAC_TOE * tileSize)) / 2;
+  int i, j;
+  int joystickOX = analogRead(JOYSTICK_OX_PIN);
+  int joystickOY = analogRead(JOYSTICK_OY_PIN);
+  char moveDirectionJoystick;
+  
+  while(true)
+  {
+    checkTicTacToeGamePause();
+    
+    if (game.ticTacToe.nextMoveSelected)
+    {
+      game.ticTacToe.nextMoveSelected = false;
+
+      if (game.ticTacToe.board[game.ticTacToe.selectorOY][game.ticTacToe.selectorOX] == UNDEFINED_PLAYER_TIC_TAC_TOE)
+      {
+        tone(BUZZER_PIN, 500, 50);
+        delay(50);
+        
+        game.ticTacToe.board[game.ticTacToe.selectorOY][game.ticTacToe.selectorOX] = X_PLAYER_TIC_TAC_TOE;
+
+        j = game.ticTacToe.selectorOX;
+        i = game.ticTacToe.selectorOY;
+
+        lcd.setColor(0, 255, 0);
+        lcd.drawLine(oXOffset + j * tileSize + 0.35 * (tileSize / 2), oYOffset + i * tileSize + 0.35 * (tileSize / 2), oXOffset + j * tileSize + 1.65 * (tileSize / 2), oYOffset + i * tileSize + 1.65 * (tileSize / 2));
+        lcd.drawLine(oXOffset + j * tileSize + 1.65 * (tileSize / 2), oYOffset + i * tileSize + 0.35 * (tileSize / 2), oXOffset + j * tileSize + 0.35 * (tileSize / 2), oYOffset + i * tileSize + 1.65 * (tileSize / 2));
+      
+        break;
+      }
+    }
+    
+    moveDirectionJoystick = PLAYER_MOVE_UNDEFINED_TIC_TAC_TOE;
+    
+    if (joystickOX < JOYSTICK_RIGHT_THRESHOLD)
+    {
+      moveDirectionJoystick = PLAYER_MOVE_RIGHT_TIC_TAC_TOE;
+    }
+    else if (joystickOX > JOYSTICK_LEFT_THRESHOLD)
+    {
+      moveDirectionJoystick = PLAYER_MOVE_LEFT_TIC_TAC_TOE;
+    }
+
+    if (joystickOY < JOYSTICK_UP_THRESHOLD)
+    {
+      if (moveDirectionJoystick == PLAYER_MOVE_UNDEFINED_TIC_TAC_TOE)
+      {
+        moveDirectionJoystick = PLAYER_MOVE_UP_TIC_TAC_TOE;
+      }
+      else
+      {
+        moveDirectionJoystick = PLAYER_MOVE_UNDEFINED_TIC_TAC_TOE;
+      }
+    }
+    else if (joystickOY > JOYSTICK_DOWN_THRESHOLD)
+    {
+      if (moveDirectionJoystick == PLAYER_MOVE_UNDEFINED_TIC_TAC_TOE)
+      {
+        moveDirectionJoystick = PLAYER_MOVE_DOWN_TIC_TAC_TOE;
+      }
+      else
+      {
+        moveDirectionJoystick = PLAYER_MOVE_UNDEFINED_TIC_TAC_TOE;
+      }
+    }
+
+    switch(moveDirectionJoystick)
+    {
+      case PLAYER_MOVE_UP_TIC_TAC_TOE:
+      {
+        if (game.ticTacToe.selectorOY > 0)
+        {
+          drawCursorTicTacToeGame(true);
+          game.ticTacToe.selectorOY--;
+          drawCursorTicTacToeGame(false);
+        }
+
+        break;
+      }
+      case PLAYER_MOVE_DOWN_TIC_TAC_TOE:
+      {
+        if (game.ticTacToe.selectorOY < BOARD_SIZE_TIC_TAC_TOE - 1)
+        {
+          drawCursorTicTacToeGame(true);
+          game.ticTacToe.selectorOY++;
+          drawCursorTicTacToeGame(false);
+        }
+
+        break;
+      }
+      case PLAYER_MOVE_LEFT_TIC_TAC_TOE:
+      {
+        if (game.ticTacToe.selectorOX > 0)
+        {
+          drawCursorTicTacToeGame(true);
+          game.ticTacToe.selectorOX--;
+          drawCursorTicTacToeGame(false);
+        }
+
+        break;
+      }
+      case PLAYER_MOVE_RIGHT_TIC_TAC_TOE:
+      {
+        if (game.ticTacToe.selectorOX < BOARD_SIZE_TIC_TAC_TOE - 1)
+        {
+          drawCursorTicTacToeGame(true);
+          game.ticTacToe.selectorOX++;
+          drawCursorTicTacToeGame(false);
+        }
+
+        break;
+      }
+    }
+
+    delay(GAME_DELAY_TIC_TAC_TOE);
+
+    joystickOX = analogRead(JOYSTICK_OX_PIN);
+    joystickOY = analogRead(JOYSTICK_OY_PIN);
+  }
+}
+
+void checkTicTacToeGamePause()
+{
+  if (game.ticTacToe.gamePaused == TIC_TAC_TOE_PLAY_GAME)
+  {
+    return;
+  }
+  else if (game.ticTacToe.gamePaused == TIC_TAC_TOE_PAUSE_GAME)
+  {
+    pauseTicTacToe();
+  }
+}
+
+void pauseTicTacToe()
+{
+  lcd.clearScreen();
+
+  lcd.setFont(ucg_font_ncenR14_tr);
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Game paused!")) / 2, 100);
   lcd.setColor(255, 200, 200);
-  lcd.print("Tic-Tac_Toe");
+  lcd.print("Game paused!");
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Red to resume...")) / 2, 275);
+  lcd.setColor(255, 0, 0);
+  lcd.print("Press Red to resume...");
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Blue to exit...")) / 2, 300);
+  lcd.setColor(0, 0, 255);
+  lcd.print("Press Blue to exit...");
+
+  while(game.ticTacToe.gamePaused == TIC_TAC_TOE_PAUSE_GAME);
+
+  resumeTicTacToe();
+}
+
+void resumeTicTacToe()
+{
+  lcd.clearScreen();
+  
+  drawTicTacToeBoard();
+}
+
+void checkIfPlayerWonAndMove()
+{
+  if (checkForGameOverTicTacToe(X_PLAYER_TIC_TAC_TOE))
+  {
+    ticTacToeGameOver(PLAYER_WON_TIC_TAC_TOE);
+  }
+
+  generateNextMovement();
+}
+
+bool checkForGameOverTicTacToe(char player)
+{
+  int i, j;
+
+  for (i = 0; i < BOARD_SIZE_TIC_TAC_TOE; i++)
+  {
+    j = 0;
+
+    while (j < BOARD_SIZE_TIC_TAC_TOE && game.ticTacToe.board[i][j] == player)
+    {
+      j++;
+    }
+
+    if (j == BOARD_SIZE_TIC_TAC_TOE)
+    {
+      return true;
+    }
+
+    j = 0;
+
+    while (j < BOARD_SIZE_TIC_TAC_TOE && game.ticTacToe.board[j][i] == player)
+    {
+      j++;
+    }
+
+    if (j == BOARD_SIZE_TIC_TAC_TOE)
+    {
+      return true;
+    }
+  }
+
+  j = 0;
+
+  while (j < BOARD_SIZE_TIC_TAC_TOE && game.ticTacToe.board[j][j] == player)
+  {
+    j++;
+  }
+
+  if (j == BOARD_SIZE_TIC_TAC_TOE)
+  {
+    return true;
+  }
+
+  j = 0;
+
+  while (j < BOARD_SIZE_TIC_TAC_TOE && game.ticTacToe.board[j][BOARD_SIZE_TIC_TAC_TOE - j - 1] == player)
+  {
+    j++;
+  }
+
+  if (j == BOARD_SIZE_TIC_TAC_TOE)
+  {
+    return true;
+  }
+
+  return false;
+}
+
+void generateNextMovement()
+{
+  int tileSize = lcd.getWidth() / BOARD_SIZE_TIC_TAC_TOE;
+  int oYOffset = (lcd.getHeight() - (BOARD_SIZE_TIC_TAC_TOE * tileSize)) / 2;
+  int oXOffset = (lcd.getWidth() - (BOARD_SIZE_TIC_TAC_TOE * tileSize)) / 2;
+  bool moved = false;
+  bool gameOver = true;
+  int freeCells;
+
+  // try to win
+  for (int i = 0; i < BOARD_SIZE_TIC_TAC_TOE; i++)
+  {
+    for (int j = 0; j < BOARD_SIZE_TIC_TAC_TOE; j++)
+    {
+      if (game.ticTacToe.board[i][j] == UNDEFINED_PLAYER_TIC_TAC_TOE)
+      {
+        game.ticTacToe.board[i][j] = O_PLAYER_TIC_TAC_TOE;
+
+        if(checkForGameOverTicTacToe(O_PLAYER_TIC_TAC_TOE))
+        {
+          lcd.setColor(255, 0, 0);
+          lcd.drawCircle(oXOffset + j * tileSize + tileSize / 2, oYOffset + i * tileSize + tileSize / 2, 0.65 * (tileSize / 2), UCG_DRAW_ALL);
+
+          ticTacToeGameOver(PLAYER_LOST_TIC_TAC_TOE);
+        }
+        else
+        {
+          game.ticTacToe.board[i][j] = UNDEFINED_PLAYER_TIC_TAC_TOE;
+        }
+      }
+    }
+  }
+
+  // try to defend
+  for (int i = 0; !moved && i < BOARD_SIZE_TIC_TAC_TOE; i++)
+  {
+    for (int j = 0; j < BOARD_SIZE_TIC_TAC_TOE; j++)
+    {
+      if (game.ticTacToe.board[i][j] == UNDEFINED_PLAYER_TIC_TAC_TOE)
+      {
+        game.ticTacToe.board[i][j] = X_PLAYER_TIC_TAC_TOE;
+
+        if(checkForGameOverTicTacToe(X_PLAYER_TIC_TAC_TOE))
+        {
+          game.ticTacToe.board[i][j] = O_PLAYER_TIC_TAC_TOE;
+          moved = true;
+          
+          lcd.setColor(255, 0, 0);
+          lcd.drawCircle(oXOffset + j * tileSize + tileSize / 2, oYOffset + i * tileSize + tileSize / 2, 0.65 * (tileSize / 2), UCG_DRAW_ALL);
+
+          break;
+        }
+        else
+        {
+          game.ticTacToe.board[i][j] = UNDEFINED_PLAYER_TIC_TAC_TOE;
+        }
+      }
+    }
+  }
+
+  freeCells = 0;
+
+  for (int i = 0; i < BOARD_SIZE_TIC_TAC_TOE; i++)
+  {
+    for (int j = 0; j < BOARD_SIZE_TIC_TAC_TOE; j++)
+    {
+      if (game.ticTacToe.board[i][j] == UNDEFINED_PLAYER_TIC_TAC_TOE)
+      {
+        freeCells++;
+      }
+    }
+  }
+
+  if (freeCells > 1)
+  {
+    gameOver = false;
+  }
+
+  freeCells = random(analogRead(UNCONNECTED_PIN)) % freeCells;
+
+  for (int i = 0; !moved && i < BOARD_SIZE_TIC_TAC_TOE; i++)
+  {
+    for (int j = 0; j < BOARD_SIZE_TIC_TAC_TOE; j++)
+    {
+      if (game.ticTacToe.board[i][j] == UNDEFINED_PLAYER_TIC_TAC_TOE)
+      {
+        if (freeCells == 0)
+        {
+          game.ticTacToe.board[i][j] = O_PLAYER_TIC_TAC_TOE;
+          moved = true;
+          
+          lcd.setColor(255, 0, 0);
+          lcd.drawCircle(oXOffset + j * tileSize + tileSize / 2, oYOffset + i * tileSize + tileSize / 2, 0.65 * (tileSize / 2), UCG_DRAW_ALL);
+
+          break;
+        }
+        else
+        {
+          freeCells--;
+        }
+      }
+    }
+  }
+
+  
+  if (gameOver)
+  {
+    ticTacToeGameOver(TIE_TIC_TAC_TOE);
+  }
+}
+
+void ticTacToeGameOver(char result)
+{
+  int tileSize = lcd.getWidth() / BOARD_SIZE_TIC_TAC_TOE;
+  int oYOffset = (lcd.getHeight() - (BOARD_SIZE_TIC_TAC_TOE * tileSize)) / 2;
+  gameState = GAME_OVER_TIC_TAC_TOE;
+  
+  lcd.setFont(ucg_font_ncenR14_tr);
+  lcd.setPrintPos(0, 16);
+
+  switch(result)
+  {
+    case PLAYER_WON_TIC_TAC_TOE:
+    {
+      lcd.setColor(0, 255, 0);
+      lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("You won!")) / 2, oYOffset - 14);
+      lcd.print("You won!");
+
+      break;
+    }
+    case TIE_TIC_TAC_TOE:
+    {
+      lcd.setColor(255, 128, 0);
+      lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Nobody won!")) / 2, oYOffset - 14);
+      lcd.print("Nobody won!");
+
+      break;
+    }
+    case PLAYER_LOST_TIC_TAC_TOE:
+    {
+      lcd.setColor(255, 0, 0);
+      lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("You lost!")) / 2, oYOffset - 14);
+      lcd.print("You lost!");
+
+      break;
+    }
+  }
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press joystick to continue...")) / 2, lcd.getHeight() - 14);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Press joystick to continue...");
+
+  while(gameState == GAME_OVER_TIC_TAC_TOE);
+
+  // reset the entire console
+  asm volatile ("jmp 0");
 }
 
 // 2048 game implementation
@@ -2155,6 +2670,7 @@ void draw2048Board(char drawDirection)
           
           lcd.setColor(255, 255, 255);
           lcd.drawRFrame(oXOffset + j * tileSize, oYOffset + i * tileSize, tileSize, tileSize, 4);
+          
           setTileColor2048(game.the2048.board[i][j]);
           lcd.drawRBox(oXOffset + j * tileSize + 1, oYOffset + i * tileSize + 1, tileSize - 2, tileSize - 2, 4);
           
@@ -2322,6 +2838,8 @@ char waitAndUpdatePlayerMove2048Game()
       return moveDirectionJoystick;
     }
 
+    delay(GAME_DELAY_2048);
+
     joystickOX = analogRead(JOYSTICK_OX_PIN);
     joystickOY = analogRead(JOYSTICK_OY_PIN);
   }
@@ -2337,10 +2855,6 @@ void check2048GamePause()
   {
     pause2048();
   }
-  else if (game.the2048.gamePaused == THE_2048_EXIT_GAME)
-  {
-    exit2048();
-  }  
 }
 
 void pause2048()
@@ -2391,28 +2905,6 @@ void resume2048()
   lcd.clearScreen();
   
   draw2048Board(DRAW_FROM_UP_2048_BOARD);
-}
-
-void exit2048()
-{
-  lcd.clearScreen();
-
-  lcd.setFont(ucg_font_ncenR14_tr);
-  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Do you want to exit?")) / 2, 150);
-  lcd.setColor(255, 200, 200);
-  lcd.print("Do you want to exit?");
-
-  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Pause to resume")) / 2, 275);
-  lcd.setColor(255, 200, 200);
-  lcd.print("Press Pause to resume");
-
-  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Exit to exit game...")) / 2, 300);
-  lcd.setColor(255, 200, 200);
-  lcd.print("Press Exit to exit game...");
-
-  while(game.the2048.gamePaused == THE_2048_EXIT_GAME);
-
-  resume2048();
 }
 
 bool moveIfPossible2048Game(int moveDirection)
