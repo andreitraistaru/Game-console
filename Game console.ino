@@ -16,6 +16,7 @@
 #define INITIAL_STATE 0
 #define CHOOSE_GAME_STATE 1
 #define PLAY_GAME_TETRIS 2
+#define GAME_OVER_TETRIS 3
 
 #define GAME_UNDEFINED -1
 #define GAME_TETRIS 0
@@ -68,6 +69,7 @@ typedef struct
   bool movingPiece;
   bool rotatePiece;
   bool emptyBoard;
+  unsigned long score;
 } TetrisGame;
 
 volatile TetrisGame tetris;
@@ -116,6 +118,10 @@ void pushButtonAction()
 
       break;
     }
+    case GAME_OVER_TETRIS:
+    {
+      gameState = INITIAL_STATE;
+    }
   }
 }
 
@@ -146,13 +152,13 @@ void showMenu()
   lcd.clearScreen();
 
   // print menu message
-  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Choose a game:")) / 2, 25);
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Select game:")) / 2, 50);
   lcd.setColor(255, 200, 200);
-  lcd.print("Choose a game:");
+  lcd.print("Select game:");
 
   // draw frame for selected option
   lcd.setColor(0, 255, 0);
-  lcd.drawFrame(27, 97  + gameSelected * 75, 186, 46);
+  lcd.drawFrame(27, 97 + gameSelected * 75, 186, 46);
   
   // draw Tetris option box
   lcd.setColor(255, 240, 200);
@@ -229,6 +235,28 @@ void showMenu()
     
     delay(200);
   }
+}
+
+void printTetrisScore()
+{
+  static unsigned long lastScore = 0;
+
+  lcd.setPrintPos(0, 16);
+  lcd.setColor(160, 160, 200);
+  lcd.print("Score: ");
+  
+  if (lastScore != tetris.score)
+  {
+    lcd.setPrintPos(60, 16);
+    lcd.setColor(0, 0, 0);
+    lcd.print(String(lastScore));
+  }
+
+  lcd.setPrintPos(60, 16);
+  lcd.setColor(160, 160, 200);
+  lcd.print(String(tetris.score));
+
+  lastScore = tetris.score;
 }
 
 void drawTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceType, bool colored)
@@ -529,6 +557,8 @@ void drawTetrisBoard(char lastPieceMove)
   drawMovingTetrisPiece(tetris.tetrisPieces[movingPiece].x, tetris.tetrisPieces[movingPiece].y,
                         tetris.tetrisPieces[movingPiece].rotation, tetris.tetrisPieces[movingPiece].pieceType,
                         lastPieceMove);
+
+  printTetrisScore();
 }
 
 int getDimensionTetrisPiece(char pieceType, int rotation, bool oXDimension)
@@ -631,19 +661,39 @@ void printTetrisBoard(void)
   Serial.print("\n\n\n");
 }
 
-void tetrisGameOver(bool won)
+void tetrisGameOver()
 {
-  if (won)
-  {
-    // TODO: print winning message
-  }
-  else
-  {
-    // TODO: print loosing message
-  }
+  char score[15];
+  sprintf(score, "%lu", tetris.score);
+  
+  lcd.clearScreen();
 
-  // TODO: restart game
-  resetConsole();
+  gameState = GAME_OVER_TETRIS;
+  
+  lcd.clearScreen();
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Game Over!")) / 2, 70);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Game Over!");
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Your score:")) / 2, 150);
+  lcd.print("Your score:");
+
+  lcd.setColor(0, 255, 0);
+  lcd.drawRFrame((lcd.getWidth() - lcd.getStrWidth(score) - 25) / 2, 170, lcd.getStrWidth(score) + 25, 40, 8);
+  
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth(score)) / 2, 195);
+  lcd.setColor(255, 0, 0);
+  lcd.print(score);
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press joystick to continue...")) / 2, 275);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Press joystick to continue...");
+
+  while(gameState == GAME_OVER_TETRIS);
+
+  // reset the entire console
+  asm volatile ("jmp 0");
 }
 
 void generateNewTetrisPiece(void)
@@ -672,6 +722,7 @@ void generateNewTetrisPiece(void)
   tetris.tetrisPieces[tetris.numberOfPieces].y = 0;
   tetris.tetrisPieces[tetris.numberOfPieces].x = 16 * x;
   tetris.emptyBoard = false;
+  tetris.score++;
 
   tetris.numberOfPieces++;
   
@@ -691,7 +742,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[0][x + 1]
               || tetris.tetrisBoard[0][x + 2] || tetris.tetrisBoard[0][x + 3])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -709,7 +760,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[1][x]
               || tetris.tetrisBoard[2][x] || tetris.tetrisBoard[3][x])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -732,7 +783,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x + 2] || tetris.tetrisBoard[1][x]
               || tetris.tetrisBoard[1][x + 1] || tetris.tetrisBoard[1][x + 2])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x + 2] = true;
@@ -750,7 +801,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[1][x]
               || tetris.tetrisBoard[2][x] || tetris.tetrisBoard[2][x + 1])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -768,7 +819,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[0][x + 1]
               || tetris.tetrisBoard[0][x + 2] || tetris.tetrisBoard[1][x])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -786,7 +837,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[0][x + 1]
               || tetris.tetrisBoard[1][x + 1] || tetris.tetrisBoard[2][x + 1])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -809,7 +860,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[1][x]
               || tetris.tetrisBoard[1][x + 1] || tetris.tetrisBoard[1][x + 2])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -827,7 +878,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[0][x + 1]
               || tetris.tetrisBoard[1][x] || tetris.tetrisBoard[2][x])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -845,7 +896,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[0][x + 1]
               || tetris.tetrisBoard[0][x + 2] || tetris.tetrisBoard[1][x + 2])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -863,7 +914,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x + 1] || tetris.tetrisBoard[1][x + 1]
               || tetris.tetrisBoard[2][x] || tetris.tetrisBoard[2][x + 1])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x + 1] = true;
@@ -884,7 +935,7 @@ void generateNewTetrisPiece(void)
       if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[0][x + 1]
               || tetris.tetrisBoard[1][x] || tetris.tetrisBoard[1][x + 1])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -906,7 +957,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x + 1] || tetris.tetrisBoard[0][x + 2]
               || tetris.tetrisBoard[1][x] || tetris.tetrisBoard[1][x + 1])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x + 1] = true;
@@ -924,7 +975,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[1][x]
               || tetris.tetrisBoard[1][x + 1] || tetris.tetrisBoard[2][x + 1])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -947,7 +998,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x + 1] || tetris.tetrisBoard[1][x]
               || tetris.tetrisBoard[1][x + 1] || tetris.tetrisBoard[1][x + 2])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x + 1] = true;
@@ -965,7 +1016,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[1][x]
               || tetris.tetrisBoard[1][x + 1] || tetris.tetrisBoard[2][x])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -983,7 +1034,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[0][x + 1]
               || tetris.tetrisBoard[0][x + 2] || tetris.tetrisBoard[1][x + 1])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -1001,7 +1052,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x + 1] || tetris.tetrisBoard[1][x]
               || tetris.tetrisBoard[1][x + 1] || tetris.tetrisBoard[2][x + 1])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x + 1] = true;
@@ -1024,7 +1075,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x] || tetris.tetrisBoard[0][x + 1]
               || tetris.tetrisBoard[1][x + 1] || tetris.tetrisBoard[1][x + 2])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x] = true;
@@ -1042,7 +1093,7 @@ void generateNewTetrisPiece(void)
         if (tetris.tetrisBoard[0][x + 1] || tetris.tetrisBoard[1][x]
               || tetris.tetrisBoard[1][x + 1] || tetris.tetrisBoard[2][x])
         {
-          tetrisGameOver(false);
+          tetrisGameOver();
         }
         
         tetris.tetrisBoard[0][x + 1] = true;
@@ -1746,6 +1797,10 @@ void removeLineFromTetrisBoard(int lineNo)
       }
     }
   }
+
+  tetris.score += 10;
+
+  printTetrisScore();
 }
 
 void removeFullLinesFromTetrisBoard()
@@ -1784,13 +1839,17 @@ void playTetris()
   char lastPieceMove;
 
   gameState = PLAY_GAME_TETRIS;
+  
   lcd.clearScreen();
 
   tetris.numberOfPieces = 0;
   tetris.movingPiece = false;
   tetris.rotatePiece = false;
   tetris.emptyBoard = true;
+  tetris.score = 0;
+  
   clearTetrisBoard();
+  printTetrisScore();
 
   while(true)
   {
@@ -1799,8 +1858,6 @@ void playTetris()
     generateNewTetrisPiece();    
     drawTetrisBoard(lastPieceMove);
     
-    //printTetrisBoard();
-
     delay(200);
   }
 }
@@ -1850,8 +1907,6 @@ void loop()
   gameState = INITIAL_STATE;
   gameSelected = GAME_TETRIS;
   gameToPlay = GAME_UNDEFINED;
-
-  playTetris();
   
   showMenu();
 
