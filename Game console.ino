@@ -2,27 +2,30 @@
 #include <SPI.h>
 #include "Ucglib.h"
 
-#define BUZZER_PIN 9
+#define BUZZER_PIN 7
 
-#define RGB_LED_R_PIN A8
-#define RGB_LED_G_PIN A9
-#define RGB_LED_B_PIN A10
+#define RGB_LED_RIGHT_R_PIN A5
+#define RGB_LED_RIGHT_G_PIN A6
+#define RGB_LED_RIGHT_B_PIN A7
 
-#define PUSH_BUTTON_0_PIN 19
-#define TIMEOUT_FOR_DEBOUNCE_PUSH_BUTTON_0 500
+#define RGB_LED_LEFT_R_PIN A4
+#define RGB_LED_LEFT_G_PIN A3
+#define RGB_LED_LEFT_B_PIN A2
 
-#define PUSH_BUTTON_1_PIN 20
-#define TIMEOUT_FOR_DEBOUNCE_PUSH_BUTTON_1 500
+#define PUSH_BUTTON_BLUE_PIN 19
+#define PUSH_BUTTON_RED_PIN 20
+#define TIMEOUT_FOR_DEBOUNCE_PUSH_BUTTON_BLUE 150
+#define TIMEOUT_FOR_DEBOUNCE_PUSH_BUTTON_RED 150
 
-#define JOYSTICK_OX_PIN A15
-#define JOYSTICK_OY_PIN A14
+#define JOYSTICK_OX_PIN A14
+#define JOYSTICK_OY_PIN A15
 #define JOYSTICK_PUSH_PIN 21
 
 #define JOYSTICK_LEFT_THRESHOLD 900
 #define JOYSTICK_RIGHT_THRESHOLD 50
 #define JOYSTICK_DOWN_THRESHOLD 900
 #define JOYSTICK_UP_THRESHOLD 50
-#define TIMEOUT_FOR_DEBOUNCE_PUSH_JOYSTICK 50
+#define TIMEOUT_FOR_DEBOUNCE_PUSH_JOYSTICK 100
 
 #define UNCONNECTED_PIN A0
 
@@ -30,6 +33,8 @@
 #define CHOOSE_GAME_STATE 1
 #define PLAY_GAME_TETRIS 2
 #define GAME_OVER_TETRIS 3
+#define PLAY_GAME_2048 4
+#define GAME_OVER_THE_2048 5
 
 #define GAME_UNDEFINED -1
 #define GAME_TETRIS 0
@@ -40,10 +45,10 @@ Ucglib_ILI9341_18x240x320_HWSPI lcd(/*cd=*/ 48,/*cs=*/ 49,/*reset=*/ 50);
 
 // used for joystick push button's debouncing
 volatile long millisAtPreviousPushJoystick = 0;
-// used for push button_0's debouncing
-volatile long millisAtPreviousPushButton0 = 0;
-// used for push button_1's debouncing
-volatile long millisAtPreviousPushButton1 = 0;
+// used for push button_blue's debouncing
+volatile long millisAtPreviousPushButtonBlue = 0;
+// used for push button_red's debouncing
+volatile long millisAtPreviousPushButtonRed = 0;
 // used for saving the state of the entire game console
 volatile char gameState = INITIAL_STATE;
 // used for selection in menu of the game console
@@ -74,12 +79,18 @@ volatile char gameToPlay = GAME_UNDEFINED;
 #define TETRIS_PAUSE_GAME 1
 #define TETRIS_EXIT_GAME 2
 
-#define BOARD_SIZE_2048 6
+#define BOARD_SIZE_2048 5
+
+#define PLAYER_MOVE_UNDEFINED_2048 -1
 
 #define DRAW_FROM_UP_2048_BOARD 0
 #define DRAW_FROM_DOWN_2048_BOARD 1
 #define DRAW_FROM_LEFT_2048_BOARD 2
 #define DRAW_FROM_RIGHT_2048_BOARD 3
+
+#define THE_2048_PLAY_GAME 0
+#define THE_2048_PAUSE_GAME 1
+#define THE_2048_EXIT_GAME 2
 
 typedef struct
 {
@@ -108,8 +119,11 @@ typedef struct
 
 typedef struct
 {
+  char gamePaused;
+  unsigned int emptyCells;
   unsigned long score;
-  int board[BOARD_SIZE_2048][BOARD_SIZE_2048];
+  unsigned int board[BOARD_SIZE_2048][BOARD_SIZE_2048];
+  bool updates[BOARD_SIZE_2048][BOARD_SIZE_2048];
 } The2048Game;
 
 typedef union
@@ -138,10 +152,10 @@ ISR(INT1_vect)
 {
   long millisNow = millis();
 
-  if (millisNow - millisAtPreviousPushButton0 > TIMEOUT_FOR_DEBOUNCE_PUSH_BUTTON_0)
+  if (millisNow - millisAtPreviousPushButtonBlue > TIMEOUT_FOR_DEBOUNCE_PUSH_BUTTON_BLUE)
   {
-    millisAtPreviousPushButton0 = millisNow;
-    pushButton0Action();
+    millisAtPreviousPushButtonBlue = millisNow;
+    pushButtonBlueAction();
   } 
 }
 
@@ -149,23 +163,32 @@ ISR(INT2_vect)
 {
   long millisNow = millis();
 
-  if (millisNow - millisAtPreviousPushButton1 > TIMEOUT_FOR_DEBOUNCE_PUSH_BUTTON_1)
+  if (millisNow - millisAtPreviousPushButtonRed > TIMEOUT_FOR_DEBOUNCE_PUSH_BUTTON_RED)
   {
-    millisAtPreviousPushButton1 = millisNow;
-    pushButton1Action();
+    millisAtPreviousPushButtonRed = millisNow;
+    pushButtonRedAction();
   } 
 }
 
 void setup()
 {
   gameState = INITIAL_STATE;
-
+  
+  pinMode(PUSH_BUTTON_BLUE_PIN, INPUT_PULLUP);
+  pinMode(PUSH_BUTTON_RED_PIN, INPUT_PULLUP);
+  
+  pinMode(JOYSTICK_PUSH_PIN, INPUT);
   pinMode(JOYSTICK_OX_PIN, INPUT);
   pinMode(JOYSTICK_OY_PIN, INPUT);
 
-  pinMode(RGB_LED_R_PIN, OUTPUT);
-  pinMode(RGB_LED_G_PIN, OUTPUT);
-  pinMode(RGB_LED_B_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  
+  pinMode(RGB_LED_RIGHT_R_PIN, OUTPUT);
+  pinMode(RGB_LED_RIGHT_G_PIN, OUTPUT);
+  pinMode(RGB_LED_RIGHT_B_PIN, OUTPUT);
+  pinMode(RGB_LED_LEFT_R_PIN, OUTPUT);
+  pinMode(RGB_LED_LEFT_G_PIN, OUTPUT);
+  pinMode(RGB_LED_LEFT_B_PIN, OUTPUT);
   
   cli();
 
@@ -185,16 +208,17 @@ void setup()
 
 void loop()
 {
-  analogWrite(RGB_LED_R_PIN, 230);
-  analogWrite(RGB_LED_G_PIN, 230);
-  analogWrite(RGB_LED_B_PIN, 0);
+  analogWrite(RGB_LED_RIGHT_R_PIN, 0);
+  analogWrite(RGB_LED_RIGHT_G_PIN, 0);
+  analogWrite(RGB_LED_RIGHT_B_PIN, 0);
+  analogWrite(RGB_LED_LEFT_R_PIN, 0);
+  analogWrite(RGB_LED_LEFT_G_PIN, 0);
+  analogWrite(RGB_LED_LEFT_B_PIN, 0);
   
   gameState = INITIAL_STATE;
   gameSelected = GAME_TETRIS;
   gameToPlay = GAME_UNDEFINED;
   
-  //play2048();
-
   showMenu();
 
   playGame();
@@ -238,11 +262,46 @@ void joystickPushButtonAction()
     case GAME_OVER_TETRIS:
     {
       gameState = INITIAL_STATE;
+
+      break;
+    }
+    case GAME_OVER_THE_2048:
+    {
+      gameState = INITIAL_STATE;
+
+      break;
     }
   }
 }
 
-void pushButton0Action()
+void pushButtonBlueAction()
+{
+  switch (gameState)
+  {
+    case PLAY_GAME_TETRIS:
+    {
+      if (game.tetris.gamePaused == TETRIS_PAUSE_GAME)
+      {
+        // reset the entire console
+        asm volatile ("jmp 0");
+      }
+
+      break;
+    }
+    case PLAY_GAME_2048:
+    {
+      if (game.the2048.gamePaused == THE_2048_PAUSE_GAME)
+      {
+        // reset the entire console
+        asm volatile ("jmp 0");
+      }
+
+      break;
+    }
+  }
+}
+
+void pushButtonRedAction()
 {
   switch (gameState)
   {
@@ -256,30 +315,18 @@ void pushButton0Action()
       {
         game.tetris.gamePaused = TETRIS_PLAY_GAME;
       }
-      else if (game.tetris.gamePaused == TETRIS_EXIT_GAME)
-      {
-        // reset the entire console
-        asm volatile ("jmp 0");
-      }
 
       break;
     }
-  }
-}
-
-void pushButton1Action()
-{
-  switch (gameState)
-  {
-    case PLAY_GAME_TETRIS:
+    case PLAY_GAME_2048:
     {
-      if (game.tetris.gamePaused == TETRIS_PLAY_GAME)
+      if (game.the2048.gamePaused == THE_2048_PLAY_GAME)
       {
-        game.tetris.gamePaused = TETRIS_EXIT_GAME;
+        game.the2048.gamePaused = THE_2048_PAUSE_GAME;
       }
-      else if (game.tetris.gamePaused == TETRIS_EXIT_GAME)
+      else if (game.the2048.gamePaused == THE_2048_PAUSE_GAME)
       {
-        game.tetris.gamePaused = TETRIS_PLAY_GAME;
+        game.the2048.gamePaused = THE_2048_PLAY_GAME;
       }
 
       break;
@@ -308,7 +355,7 @@ void showMenu()
 
   // print Tetris option text
   lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Tetris")) / 2, 125);
-  lcd.setColor(255, 255, 255);
+  lcd.setColor(0, 0, 0);
   lcd.print("Tetris");
 
   // draw Tic-Tac-Toe option box
@@ -317,7 +364,7 @@ void showMenu()
 
   // print Tetris option text
   lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Tic-Tac-Toe")) / 2, 200);
-  lcd.setColor(255, 255, 255);
+  lcd.setColor(0, 0, 0);
   lcd.print("Tic-Tac-Toe");
 
   // draw 2048 option box
@@ -326,7 +373,7 @@ void showMenu()
 
   // print Tetris option text
   lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("2048")) / 2, 275);
-  lcd.setColor(255, 255, 255);
+  lcd.setColor(0, 0, 0);
   lcd.print("2048");
 
   gameState = CHOOSE_GAME_STATE;
@@ -411,13 +458,13 @@ void playTetris()
 
   while(true)
   {
-    checkGamePause();
+    checkTetrisGamePause();
     lastPieceMove = passTimeTetrisGame();
     removeFullLinesFromTetrisBoard();
     generateNewTetrisPiece();    
     drawMovingTetrisPiece(game.tetris.movingPiece.x, game.tetris.movingPiece.y, game.tetris.movingPiece.rotation, game.tetris.movingPiece.pieceType, lastPieceMove);
     printTetrisScore();
-    
+      
     delay(game.tetris.gameDelay);
   }
 }
@@ -457,7 +504,7 @@ void initTetrisGame()
   delay(game.tetris.gameDelay);
 }
 
-void checkGamePause()
+void checkTetrisGamePause()
 {
   if (game.tetris.gamePaused == TETRIS_PLAY_GAME)
   {
@@ -496,15 +543,32 @@ void exitTetris()
 
 void pauseTetris()
 {
+  char score[15];
+  sprintf(score, "%lu", game.tetris.score);
+  
   lcd.clearScreen();
 
-  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Game paused!")) / 2, 150);
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Game paused!")) / 2, 100);
   lcd.setColor(255, 200, 200);
   lcd.print("Game paused!");
 
-  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press joystick to resume...")) / 2, 275);
-  lcd.setColor(255, 200, 200);
-  lcd.print("Press Pause to resume...");
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Your score:")) / 2, 150);
+  lcd.print("Your score:");
+
+  lcd.setColor(0, 255, 0);
+  lcd.drawRFrame((lcd.getWidth() - lcd.getStrWidth(score) - 25) / 2, 170, lcd.getStrWidth(score) + 25, 40, 8);
+  
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth(score)) / 2, 195);
+  lcd.setColor(255, 0, 0);
+  lcd.print(score);
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Red to resume...")) / 2, 275);
+  lcd.setColor(255, 0, 0);
+  lcd.print("Press Red to resume...");
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Blue to exit...")) / 2, 300);
+  lcd.setColor(0, 0, 255);
+  lcd.print("Press Blue to exit...");
 
   while(game.tetris.gamePaused == TETRIS_PAUSE_GAME);
 
@@ -513,6 +577,7 @@ void pauseTetris()
 
 void resumeTetris()
 {
+  game.tetris.rotateMovingPieceDetected = false;
   printTetrisNonMovingBoard();
   printTetrisScore();
   drawMovingTetrisPiece(game.tetris.movingPiece.x, game.tetris.movingPiece.y, game.tetris.movingPiece.rotation, game.tetris.movingPiece.pieceType, TETRIS_PIECE_FIXED);
@@ -1572,7 +1637,7 @@ void drawMovingTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceT
     }
     case TETRIS_PIECE_ROTATE:
     {
-      tone(9, 500, 50);
+      tone(BUZZER_PIN, 500, 50);
       delay(50);
       
       drawTetrisPiece(offsetOX, offsetOY, (rotation + 270) % 360, pieceType, false);
@@ -1582,7 +1647,7 @@ void drawMovingTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceT
     }
     case TETRIS_PIECE_MOVE_DOWN | TETRIS_PIECE_ROTATE:
     {
-      tone(9, 500, 50);
+      tone(BUZZER_PIN, 500, 50);
       delay(50);
       
       drawTetrisPiece(offsetOX, offsetOY - 16, (rotation + 270) % 360, pieceType, false);
@@ -1592,7 +1657,7 @@ void drawMovingTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceT
     }
     case TETRIS_PIECE_MOVE_LEFT | TETRIS_PIECE_ROTATE:
     {
-      tone(9, 500, 50);
+      tone(BUZZER_PIN, 500, 50);
       delay(50);
       
       drawTetrisPiece(offsetOX + 16, offsetOY, (rotation + 270) % 360, pieceType, false);
@@ -1609,7 +1674,7 @@ void drawMovingTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceT
     }
     case TETRIS_PIECE_MOVE_DOWN | TETRIS_PIECE_MOVE_LEFT | TETRIS_PIECE_ROTATE:
     {
-      tone(9, 500, 50);
+      tone(BUZZER_PIN, 500, 50);
       delay(50);
       
       drawTetrisPiece(offsetOX + 16, offsetOY - 16, (rotation + 270) % 360, pieceType, false);
@@ -1619,7 +1684,7 @@ void drawMovingTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceT
     }
     case TETRIS_PIECE_MOVE_DOWN | TETRIS_PIECE_MOVE_RIGHT | TETRIS_PIECE_ROTATE:
     {
-      tone(9, 500, 50);
+      tone(BUZZER_PIN, 500, 50);
       delay(50);
       
       drawTetrisPiece(offsetOX - 16, offsetOY - 16, (rotation + 270) % 360, pieceType, false);
@@ -1883,39 +1948,94 @@ void playTicTacToe()
 
 void play2048()
 {
+  char playerMove;
+
   lcd.clearScreen();
 
   init2048Game();
 
   while(true)
   {
-    ;
+    playerMove = waitAndUpdatePlayerMove2048Game();
+
+    draw2048Board(playerMove); 
+
+    generateNewTile2048Game();
+    
+    if (!newMoveIsPossible2048Game())
+    {
+      // board is full and no other movement is possible; game is over
+      the2048GameOver();
+    }
+
+    draw2048Board(playerMove); 
   }
 }
 
 void init2048Game()
 {
+  game.the2048.gamePaused = THE_2048_PLAY_GAME;
   game.the2048.score = 0;
+  game.the2048.emptyCells = BOARD_SIZE_2048 * BOARD_SIZE_2048;
+
+  for (int i = 0; i < BOARD_SIZE_2048; i++)
+  {
+    for (int j = 0; j < BOARD_SIZE_2048; j++)
+    {
+      game.the2048.board[i][j] = 0;
+      game.the2048.updates[i][j] = true;
+    }
+  }
+
+  generateNewTile2048Game();
 
   print2048Score();
 
   draw2048Board(DRAW_FROM_UP_2048_BOARD);
-  delay(500);
 
-  lcd.clearScreen();
+  gameState = PLAY_GAME_2048;
+}
 
-  draw2048Board(DRAW_FROM_DOWN_2048_BOARD);
-  delay(500);
+void generateNewTile2048Game()
+{
+  if (game.the2048.emptyCells == 0)
+  {
+    return;
+  }
+  
+  unsigned int tilePosition = random(analogRead(UNCONNECTED_PIN)) % game.the2048.emptyCells;
+  unsigned int tileValue;
 
-  lcd.clearScreen();
+  game.the2048.emptyCells--;
 
-  draw2048Board(DRAW_FROM_LEFT_2048_BOARD);
-  delay(500);
+  if (random(analogRead(UNCONNECTED_PIN)) % 2 == 0)
+  {
+    tileValue = 2;
+  }
+  else
+  {
+    tileValue = 4;
+  }
 
-  lcd.clearScreen();
-
-  draw2048Board(DRAW_FROM_RIGHT_2048_BOARD);
-  delay(500);
+  for (int i = 0; i < BOARD_SIZE_2048; i++)
+  {
+    for (int j = 0; j < BOARD_SIZE_2048; j++)
+    {
+      if (game.the2048.board[i][j] == 0)
+      {
+        if (tilePosition > 0)
+        {
+          tilePosition--;
+        }
+        else
+        {
+          game.the2048.board[i][j] = tileValue;
+          game.the2048.updates[i][j] = true;
+          return;
+        }
+      }
+    }
+  }
 }
 
 void print2048Score()
@@ -1941,15 +2061,82 @@ void print2048Score()
   lastScore = game.the2048.score;
 }
 
+void setTileColor2048(unsigned int tileValue)
+{
+  switch(tileValue)
+  {
+    case 0:
+    {
+      lcd.setColor(0, 0, 0);
+      return;   
+    }
+    case 2:
+    {
+      lcd.setColor(255, 241, 0);
+      return;   
+    }
+    case 4:
+    {
+      lcd.setColor(255, 140, 0);
+      return;   
+    }
+    case 8:
+    {
+      lcd.setColor(232, 17, 35);
+      return;   
+    }
+    case 16:
+    {
+      lcd.setColor(236, 0, 140);
+      return;   
+    }
+    case 32:
+    {
+      lcd.setColor(104, 33, 122);
+      return;   
+    }
+    case 64:
+    {
+      lcd.setColor(0, 24, 143);
+      return;   
+    }
+    case 128:
+    {
+      lcd.setColor(0, 188, 242);
+      return;   
+    }
+    case 256:
+    {
+      lcd.setColor(0, 178, 148);
+      return;   
+    }
+    case 512:
+    {
+      lcd.setColor(0, 158, 73);
+      return;   
+    }
+    case 1024:
+    {
+      lcd.setColor(186, 216, 10);
+      return;   
+    }
+    default:
+    {
+      lcd.setColor(160, 121, 203);
+      return;   
+    }
+  }
+}
+
 void draw2048Board(char drawDirection)
 {
   int i, j;
   int tileSize = lcd.getWidth() / BOARD_SIZE_2048;
   int oYOffset = (lcd.getHeight() - (BOARD_SIZE_2048 * tileSize));
   int oXOffset = (lcd.getWidth() - (BOARD_SIZE_2048 * tileSize)) / 2;
+  char tileValue[10] = {0};
 
-  lcd.setColor(0, 255, 255);
-  lcd.setFont(ucg_font_amstrad_cpc_8f);
+  print2048Score();
   
   switch(drawDirection)
   {
@@ -1959,9 +2146,27 @@ void draw2048Board(char drawDirection)
       {
         for (j = 0; j < BOARD_SIZE_2048; j++)
         {
-          game.the2048.board[i][j] = 0;
+          if (!game.the2048.updates[i][j])
+          {
+            continue;
+          }
+
+          game.the2048.updates[i][j] = false;
           
+          lcd.setColor(255, 255, 255);
           lcd.drawRFrame(oXOffset + j * tileSize, oYOffset + i * tileSize, tileSize, tileSize, 4);
+          setTileColor2048(game.the2048.board[i][j]);
+          lcd.drawRBox(oXOffset + j * tileSize + 1, oYOffset + i * tileSize + 1, tileSize - 2, tileSize - 2, 4);
+          
+          if (game.the2048.board[i][j] > 0)
+          {
+            sprintf(tileValue, "%u", game.the2048.board[i][j]);
+
+            lcd.setFont(ucg_font_cu12_hf);
+            lcd.setPrintPos(oXOffset + j * tileSize + (tileSize - lcd.getStrWidth(tileValue)) / 2, oYOffset + i * tileSize + tileSize / 2 + 5);
+            lcd.setColor(255, 255, 255);
+            lcd.print(tileValue);
+          }
         }
       }
       
@@ -1973,9 +2178,27 @@ void draw2048Board(char drawDirection)
       {
         for (j = 0; j < BOARD_SIZE_2048; j++)
         {
-          game.the2048.board[i][j] = 0;
-          
+          if (!game.the2048.updates[i][j])
+          {
+            continue;
+          }
+
+          game.the2048.updates[i][j] = false;
+         
+          lcd.setColor(255, 255, 255);          
           lcd.drawRFrame(oXOffset + j * tileSize, oYOffset + i * tileSize, tileSize, tileSize, 4);
+          setTileColor2048(game.the2048.board[i][j]);
+          lcd.drawRBox(oXOffset + j * tileSize + 1, oYOffset + i * tileSize + 1, tileSize - 2, tileSize - 2, 4);
+
+          if (game.the2048.board[i][j] > 0)
+          {
+            sprintf(tileValue, "%u", game.the2048.board[i][j]);
+
+            lcd.setFont(ucg_font_cu12_hf);
+            lcd.setPrintPos(oXOffset + j * tileSize + (tileSize - lcd.getStrWidth(tileValue)) / 2, oYOffset + i * tileSize + tileSize / 2 + 5);
+            lcd.setColor(255, 255, 255);
+            lcd.print(tileValue);
+          }
         }
       }
       
@@ -1987,9 +2210,27 @@ void draw2048Board(char drawDirection)
       {
         for (j = 0; j < BOARD_SIZE_2048; j++)
         {
-          game.the2048.board[i][j] = 0;
-          
+          if (!game.the2048.updates[j][i])
+          {
+            continue;
+          }
+
+          game.the2048.updates[j][i] = false;
+
+          lcd.setColor(255, 255, 255);
           lcd.drawRFrame(oXOffset + i * tileSize, oYOffset + j * tileSize, tileSize, tileSize, 4);
+          setTileColor2048(game.the2048.board[j][i]);
+          lcd.drawRBox(oXOffset + i * tileSize + 1, oYOffset + j * tileSize + 1, tileSize - 2, tileSize - 2, 4);
+
+          if (game.the2048.board[j][i] > 0)
+          {
+            sprintf(tileValue, "%u", game.the2048.board[j][i]);
+
+            lcd.setFont(ucg_font_cu12_hf);
+            lcd.setPrintPos(oXOffset + i * tileSize + (tileSize - lcd.getStrWidth(tileValue)) / 2, oYOffset + j * tileSize + tileSize / 2 + 5);
+            lcd.setColor(255, 255, 255);
+            lcd.print(tileValue);
+          }
         }
       }
       
@@ -2001,13 +2242,585 @@ void draw2048Board(char drawDirection)
       {
         for (j = 0; j < BOARD_SIZE_2048; j++)
         {
-          game.the2048.board[i][j] = 0;
-          
+          if (!game.the2048.updates[j][i])
+          {
+            continue;
+          }
+
+          game.the2048.updates[j][i] = false;
+
+          lcd.setColor(255, 255, 255);        
           lcd.drawRFrame(oXOffset + i * tileSize, oYOffset + j * tileSize, tileSize, tileSize, 4);
+          setTileColor2048(game.the2048.board[j][i]);
+          lcd.drawRBox(oXOffset + i * tileSize + 1, oYOffset + j * tileSize + 1, tileSize - 2, tileSize - 2, 4);
+
+          if (game.the2048.board[j][i] > 0)
+          {
+            sprintf(tileValue, "%u", game.the2048.board[j][i]);
+
+            lcd.setFont(ucg_font_cu12_hf);
+            lcd.setPrintPos(oXOffset + i * tileSize + (tileSize - lcd.getStrWidth(tileValue)) / 2, oYOffset + j * tileSize + tileSize / 2 + 5);
+            lcd.setColor(255, 255, 255);
+            lcd.print(tileValue);
+          }
         }
       }
       
       break;
     }
   }
+}
+
+char waitAndUpdatePlayerMove2048Game()
+{
+  // waits until player moves in a possible direction
+  // returns direction of move
+  int joystickOX = analogRead(JOYSTICK_OX_PIN);
+  int joystickOY = analogRead(JOYSTICK_OY_PIN);
+  char moveDirectionJoystick;
+  
+  while(true)
+  {
+    check2048GamePause();
+    
+    moveDirectionJoystick = PLAYER_MOVE_UNDEFINED_2048;
+    
+    if (joystickOX < JOYSTICK_RIGHT_THRESHOLD)
+    {
+      moveDirectionJoystick = DRAW_FROM_LEFT_2048_BOARD;
+    }
+    else if (joystickOX > JOYSTICK_LEFT_THRESHOLD)
+    {
+      moveDirectionJoystick = DRAW_FROM_RIGHT_2048_BOARD;
+    }
+
+    if (joystickOY < JOYSTICK_UP_THRESHOLD)
+    {
+      if (moveDirectionJoystick == PLAYER_MOVE_UNDEFINED_2048)
+      {
+        moveDirectionJoystick = DRAW_FROM_DOWN_2048_BOARD;
+      }
+      else
+      {
+        moveDirectionJoystick = PLAYER_MOVE_UNDEFINED_2048;
+      }
+    }
+    else if (joystickOY > JOYSTICK_DOWN_THRESHOLD)
+    {
+      if (moveDirectionJoystick == PLAYER_MOVE_UNDEFINED_2048)
+      {
+        moveDirectionJoystick = DRAW_FROM_UP_2048_BOARD;
+      }
+      else
+      {
+        moveDirectionJoystick = PLAYER_MOVE_UNDEFINED_2048;
+      }
+    }
+
+    if (moveDirectionJoystick != PLAYER_MOVE_UNDEFINED_2048 && moveIfPossible2048Game(moveDirectionJoystick))
+    {
+      return moveDirectionJoystick;
+    }
+
+    joystickOX = analogRead(JOYSTICK_OX_PIN);
+    joystickOY = analogRead(JOYSTICK_OY_PIN);
+  }
+}
+
+void check2048GamePause()
+{
+  if (game.the2048.gamePaused == THE_2048_PLAY_GAME)
+  {
+    return;
+  }
+  else if (game.the2048.gamePaused == THE_2048_PAUSE_GAME)
+  {
+    pause2048();
+  }
+  else if (game.the2048.gamePaused == THE_2048_EXIT_GAME)
+  {
+    exit2048();
+  }  
+}
+
+void pause2048()
+{
+  char score[15];
+  sprintf(score, "%lu", game.the2048.score);
+  
+  lcd.clearScreen();
+
+  lcd.setFont(ucg_font_ncenR14_tr);
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Game paused!")) / 2, 100);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Game paused!");
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Your score:")) / 2, 150);
+  lcd.print("Your score:");
+
+  lcd.setColor(0, 255, 0);
+  lcd.drawRFrame((lcd.getWidth() - lcd.getStrWidth(score) - 25) / 2, 170, lcd.getStrWidth(score) + 25, 40, 8);
+  
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth(score)) / 2, 195);
+  lcd.setColor(255, 0, 0);
+  lcd.print(score);
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Red to resume...")) / 2, 275);
+  lcd.setColor(255, 0, 0);
+  lcd.print("Press Red to resume...");
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Blue to exit...")) / 2, 300);
+  lcd.setColor(0, 0, 255);
+  lcd.print("Press Blue to exit...");
+
+  while(game.the2048.gamePaused == THE_2048_PAUSE_GAME);
+
+  resume2048();
+}
+
+void resume2048()
+{
+  for (int i = 0; i < BOARD_SIZE_2048; i++)
+  {
+    for (int j = 0; j < BOARD_SIZE_2048; j++)
+    {
+      game.the2048.updates[i][j] = true;
+    }
+  }
+
+  lcd.clearScreen();
+  
+  draw2048Board(DRAW_FROM_UP_2048_BOARD);
+}
+
+void exit2048()
+{
+  lcd.clearScreen();
+
+  lcd.setFont(ucg_font_ncenR14_tr);
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Do you want to exit?")) / 2, 150);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Do you want to exit?");
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Pause to resume")) / 2, 275);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Press Pause to resume");
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press Exit to exit game...")) / 2, 300);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Press Exit to exit game...");
+
+  while(game.the2048.gamePaused == THE_2048_EXIT_GAME);
+
+  resume2048();
+}
+
+bool moveIfPossible2048Game(int moveDirection)
+{
+  bool movedDone = false;
+  int i, k;
+
+  switch (moveDirection)
+  {
+      case DRAW_FROM_UP_2048_BOARD:
+      {
+        for (int j = 0; j < BOARD_SIZE_2048; j++)
+        {
+          k = BOARD_SIZE_2048 - 1;
+          i = BOARD_SIZE_2048 - 1;
+
+          while(i >= 0)
+          {
+            while(i >= 0 && game.the2048.board[i][j] == 0)
+            {
+              i--;
+            }
+
+            if (i >= 0 && game.the2048.board[i][j] != 0)
+            {
+              game.the2048.board[k][j] = game.the2048.board[i][j];
+              
+              if (i < k)
+              {
+                movedDone = true;
+                game.the2048.board[i][j] = 0;
+                
+                game.the2048.updates[i][j] = true;
+                game.the2048.updates[k][j] = true;
+              }
+
+              k--;
+            }
+
+            i--;
+          }
+
+          for (i = BOARD_SIZE_2048 - 1; i > 0 && game.the2048.board[i - 1][j] > 0; i--)
+          {
+            if (game.the2048.board[i][j] == game.the2048.board[i - 1][j])
+            {
+              game.the2048.score += game.the2048.board[i][j];
+              
+              game.the2048.board[i][j] *= 2;
+              game.the2048.board[i - 1][j] = 0;
+
+              game.the2048.updates[i][j] = true;
+              game.the2048.updates[i - 1][j] = true;
+              
+              game.the2048.emptyCells++;
+
+              movedDone = true;
+              i--;
+            }
+          }
+          
+          k = BOARD_SIZE_2048 - 1;
+          i = BOARD_SIZE_2048 - 1;
+
+          while(i >= 0)
+          {
+            while(i >= 0 && game.the2048.board[i][j] == 0)
+            {
+              i--;
+            }
+
+            if (i >= 0 && game.the2048.board[i][j] != 0)
+            {
+              game.the2048.board[k][j] = game.the2048.board[i][j];
+              
+              if (i < k)
+              {
+                movedDone = true;
+                game.the2048.board[i][j] = 0;
+                
+                game.the2048.updates[i][j] = true;
+                game.the2048.updates[k][j] = true;
+              }
+
+              k--;
+            }
+
+            i--;
+          }
+        }
+
+        break;
+      }
+      case DRAW_FROM_DOWN_2048_BOARD:
+      {
+        for (int j = 0; j < BOARD_SIZE_2048; j++)
+        {
+          k = 0;
+          i = 0;
+
+          while(i < BOARD_SIZE_2048)
+          {
+            while(i < BOARD_SIZE_2048 && game.the2048.board[i][j] == 0)
+            {
+              i++;
+            }
+
+            if (i < BOARD_SIZE_2048 && game.the2048.board[i][j] != 0)
+            {
+              game.the2048.board[k][j] = game.the2048.board[i][j];
+              
+              if (i > k)
+              {
+                movedDone = true;
+                game.the2048.board[i][j] = 0;
+
+                game.the2048.updates[i][j] = true;
+                game.the2048.updates[k][j] = true;
+              }
+
+              k++;
+            }
+
+            i++;
+          }
+
+          for (i = 0; i < BOARD_SIZE_2048 && game.the2048.board[i + 1][j] > 0; i++)
+          {
+            if (game.the2048.board[i][j] == game.the2048.board[i + 1][j])
+            {
+              game.the2048.score += game.the2048.board[i][j];
+              
+              game.the2048.board[i][j] *= 2;
+              game.the2048.board[i + 1][j] = 0;
+
+              game.the2048.updates[i][j] = true;
+              game.the2048.updates[i + 1][j] = true;
+                
+              game.the2048.emptyCells++;
+
+              movedDone = true;
+              i++;
+            }
+          }
+          
+          k = 0;
+          i = 0;
+
+          while(i < BOARD_SIZE_2048)
+          {
+            while(i < BOARD_SIZE_2048 && game.the2048.board[i][j] == 0)
+            {
+              i++;
+            }
+
+            if (i < BOARD_SIZE_2048 && game.the2048.board[i][j] != 0)
+            {
+              game.the2048.board[k][j] = game.the2048.board[i][j];
+              
+              if (i > k)
+              {
+                movedDone = true;
+                game.the2048.board[i][j] = 0;
+
+                game.the2048.updates[i][j] = true;
+                game.the2048.updates[k][j] = true;
+              }
+
+              k++;
+            }
+
+            i++;
+          }
+        }
+
+        break;
+      }
+      case DRAW_FROM_LEFT_2048_BOARD:
+      {
+        for (int j = 0; j < BOARD_SIZE_2048; j++)
+        {
+          k = BOARD_SIZE_2048 - 1;
+          i = BOARD_SIZE_2048 - 1;
+
+          while(i >= 0)
+          {
+            while(i >= 0 && game.the2048.board[j][i] == 0)
+            {
+              i--;
+            }
+
+            if (i >= 0 && game.the2048.board[j][i] != 0)
+            {
+              game.the2048.board[j][k] = game.the2048.board[j][i];
+              
+              if (i < k)
+              {
+                movedDone = true;
+                game.the2048.board[j][i] = 0;
+
+                game.the2048.updates[j][i] = true;
+                game.the2048.updates[j][k] = true;
+              }
+
+              k--;
+            }
+
+            i--;
+          }
+
+          for (i = BOARD_SIZE_2048 - 1; i > 0 && game.the2048.board[j][i - 1] > 0; i--)
+          {
+            if (game.the2048.board[j][i] == game.the2048.board[j][i - 1])
+            {
+              game.the2048.score += game.the2048.board[j][i];
+              
+              game.the2048.board[j][i] *= 2;
+              game.the2048.board[j][i - 1] = 0;
+
+              game.the2048.updates[j][i] = true;
+              game.the2048.updates[j][i - 1] = true;
+                
+              game.the2048.emptyCells++;
+
+              movedDone = true;
+              i--;
+            }
+          }
+          
+          k = BOARD_SIZE_2048 - 1;
+          i = BOARD_SIZE_2048 - 1;
+
+          while(i >= 0)
+          {
+            while(i >= 0 && game.the2048.board[j][i] == 0)
+            {
+              i--;
+            }
+
+            if (i >= 0 && game.the2048.board[j][i] != 0)
+            {
+              game.the2048.board[j][k] = game.the2048.board[j][i];
+              
+              if (i < k)
+              {
+                movedDone = true;
+                game.the2048.board[j][i] = 0;
+
+                game.the2048.updates[j][i] = true;
+                game.the2048.updates[j][k] = true;
+              }
+
+              k--;
+            }
+
+            i--;
+          }
+        }
+
+        break;
+      }
+      case DRAW_FROM_RIGHT_2048_BOARD:
+      {
+        for (int j = 0; j < BOARD_SIZE_2048; j++)
+        {
+          k = 0;
+          i = 0;
+
+          while(i < BOARD_SIZE_2048)
+          {
+            while(i < BOARD_SIZE_2048 && game.the2048.board[j][i] == 0)
+            {
+              i++;
+            }
+
+            if (i < BOARD_SIZE_2048 && game.the2048.board[j][i] != 0)
+            {
+              game.the2048.board[j][k] = game.the2048.board[j][i];
+              
+              if (i > k)
+              {
+                movedDone = true;
+                game.the2048.board[j][i] = 0;
+                
+                game.the2048.updates[j][i] = true;
+                game.the2048.updates[j][k] = true;
+              }
+
+              k++;
+            }
+
+            i++;
+          }
+
+          for (i = 0; i < BOARD_SIZE_2048 && game.the2048.board[j][i + 1] > 0; i++)
+          {
+            if (game.the2048.board[j][i] == game.the2048.board[j][i + 1])
+            {
+              game.the2048.score += game.the2048.board[j][i];
+              
+              game.the2048.board[j][i] *= 2;
+              game.the2048.board[j][i + 1] = 0;
+
+              game.the2048.updates[j][i] = true;
+              game.the2048.updates[j][i + 1] = true;
+                
+              game.the2048.emptyCells++;
+
+              movedDone = true;
+              i++;
+            }
+          }
+          
+          k = 0;
+          i = 0;
+
+          while(i < BOARD_SIZE_2048)
+          {
+            while(i < BOARD_SIZE_2048 && game.the2048.board[j][i] == 0)
+            {
+              i++;
+            }
+
+            if (i < BOARD_SIZE_2048 && game.the2048.board[j][i] != 0)
+            {
+              game.the2048.board[j][k] = game.the2048.board[j][i];
+              
+              if (i > k)
+              {
+                movedDone = true;
+                game.the2048.board[j][i] = 0;
+
+                game.the2048.updates[j][i] = true;
+                game.the2048.updates[j][k] = true;
+              }
+
+              k++;
+            }
+
+            i++;
+          }
+        }
+
+        break;
+      }
+  }
+
+  return movedDone;
+}
+
+bool newMoveIsPossible2048Game()
+{
+  if (game.the2048.emptyCells > 0)
+  {
+    return true;
+  }
+  
+  for (int i = 0; i < BOARD_SIZE_2048; i++)
+  {
+    for (int j = 1; j < BOARD_SIZE_2048; j++)
+    {
+      if (game.the2048.board[i][j] == game.the2048.board[i][j - 1])
+      {
+        return true;
+      }
+
+      if (game.the2048.board[j][i] == game.the2048.board[j - 1][i])
+      {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+void the2048GameOver()
+{
+  char score[15];
+  sprintf(score, "%lu", game.the2048.score);
+  
+  lcd.clearScreen();
+
+  gameState = GAME_OVER_THE_2048;
+  
+  lcd.clearScreen();
+
+  lcd.setFont(ucg_font_ncenR14_tr);
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Game Over!")) / 2, 70);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Game Over!");
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Your score:")) / 2, 150);
+  lcd.print("Your score:");
+
+  lcd.setColor(0, 255, 0);
+  lcd.drawRFrame((lcd.getWidth() - lcd.getStrWidth(score) - 25) / 2, 170, lcd.getStrWidth(score) + 25, 40, 8);
+  
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth(score)) / 2, 195);
+  lcd.setColor(255, 0, 0);
+  lcd.print(score);
+
+  lcd.setPrintPos((lcd.getWidth() - lcd.getStrWidth("Press joystick to continue...")) / 2, 275);
+  lcd.setColor(255, 200, 200);
+  lcd.print("Press joystick to continue...");
+
+  while(gameState == GAME_OVER_THE_2048);
+
+  // reset the entire console
+  asm volatile ("jmp 0");
 }
