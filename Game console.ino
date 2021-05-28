@@ -29,6 +29,9 @@
 
 #define UNCONNECTED_PIN A0
 
+#define LED_LEFT 0
+#define LED_RIGHT 1
+
 #define INITIAL_STATE 0
 #define CHOOSE_GAME_STATE 1
 #define PLAY_GAME_TETRIS 2
@@ -241,12 +244,8 @@ void setup()
 
 void loop()
 {
-  analogWrite(RGB_LED_RIGHT_R_PIN, 0);
-  analogWrite(RGB_LED_RIGHT_G_PIN, 0);
-  analogWrite(RGB_LED_RIGHT_B_PIN, 0);
-  analogWrite(RGB_LED_LEFT_R_PIN, 0);
-  analogWrite(RGB_LED_LEFT_G_PIN, 0);
-  analogWrite(RGB_LED_LEFT_B_PIN, 0);
+  setLed(0, 0, 0, LED_LEFT);
+  setLed(0, 0, 0, LED_RIGHT);
   
   gameState = INITIAL_STATE;
   gameSelected = GAME_TETRIS;
@@ -274,6 +273,22 @@ void resetConsole()
 
   // reset the entire console
   asm volatile ("jmp 0");
+}
+
+void setLed(int r, int g, int b, char led)
+{
+  if (led == LED_LEFT)
+  {
+    analogWrite(RGB_LED_LEFT_R_PIN, r);
+    analogWrite(RGB_LED_LEFT_G_PIN, g);
+    analogWrite(RGB_LED_LEFT_B_PIN, b);
+  }
+  else if (led == LED_RIGHT)
+  {
+    analogWrite(RGB_LED_RIGHT_R_PIN, r);
+    analogWrite(RGB_LED_RIGHT_G_PIN, g);
+    analogWrite(RGB_LED_RIGHT_B_PIN, b);
+  }
 }
 
 void joystickPushButtonAction()
@@ -1941,7 +1956,7 @@ void drawTetrisPiece(int offsetOX, int offsetOY, int rotation, char pieceType, b
 }
 
 void tetrisGameOver()
-{
+{  
   char score[15];
   sprintf(score, "%lu", game.tetris.score);
   
@@ -1969,7 +1984,18 @@ void tetrisGameOver()
   lcd.setColor(255, 200, 200);
   lcd.print("Press joystick to continue...");
 
-  while(gameState == GAME_OVER_TETRIS);
+  while(gameState == GAME_OVER_TETRIS)
+  {
+    setLed(0, 255, 255, LED_LEFT);
+    setLed(0, 255, 255, LED_RIGHT);
+
+    delay(1);
+
+    setLed(0, 0, 0, LED_LEFT);
+    setLed(0, 0, 0, LED_RIGHT);
+
+    delay(20);
+  }
 
   // reset the entire console
   asm volatile ("jmp 0");
@@ -2453,7 +2479,45 @@ void ticTacToeGameOver(char result)
   lcd.setColor(255, 200, 200);
   lcd.print("Press joystick to continue...");
 
-  while(gameState == GAME_OVER_TIC_TAC_TOE);
+  while(gameState == GAME_OVER_TIC_TAC_TOE)
+  {
+    if (result == PLAYER_WON_TIC_TAC_TOE)
+    {
+      setLed(0, 255, 0, LED_LEFT);
+      setLed(0, 255, 0, LED_RIGHT);
+  
+      delay(1);
+  
+      setLed(0, 0, 0, LED_LEFT);
+      setLed(0, 0, 0, LED_RIGHT);
+  
+      delay(20);
+    }
+    else if (result == TIE_TIC_TAC_TOE)
+    {
+      setLed(255, 255, 0, LED_LEFT);
+      setLed(255, 255, 0, LED_RIGHT);
+  
+      delay(1);
+  
+      setLed(0, 0, 0, LED_LEFT);
+      setLed(0, 0, 0, LED_RIGHT);
+  
+      delay(20);
+    }
+    else if (result == PLAYER_LOST_TIC_TAC_TOE)
+    {
+      setLed(255, 0, 0, LED_LEFT);
+      setLed(255, 0, 0, LED_RIGHT);
+  
+      delay(1);
+  
+      setLed(0, 0, 0, LED_LEFT);
+      setLed(0, 0, 0, LED_RIGHT);
+  
+      delay(20);
+    }
+  }
 
   // reset the entire console
   asm volatile ("jmp 0");
@@ -2835,6 +2899,9 @@ char waitAndUpdatePlayerMove2048Game()
 
     if (moveDirectionJoystick != PLAYER_MOVE_UNDEFINED_2048 && moveIfPossible2048Game(moveDirectionJoystick))
     {
+      tone(BUZZER_PIN, 500, 50);
+      delay(50);
+      
       return moveDirectionJoystick;
     }
 
@@ -3311,7 +3378,18 @@ void the2048GameOver()
   lcd.setColor(255, 200, 200);
   lcd.print("Press joystick to continue...");
 
-  while(gameState == GAME_OVER_THE_2048);
+  while(gameState == GAME_OVER_THE_2048)
+  {
+    setLed(0, 255, 255, LED_LEFT);
+    setLed(0, 255, 255, LED_RIGHT);
+
+    delay(1);
+
+    setLed(0, 0, 0, LED_LEFT);
+    setLed(0, 0, 0, LED_RIGHT);
+
+    delay(20);
+  }
 
   // reset the entire console
   asm volatile ("jmp 0");
